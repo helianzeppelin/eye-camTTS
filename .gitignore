@@ -1,0 +1,23 @@
+# Android Studio / Gradle
+app-android/.gradle/
+app-android/build/
+app-android/app/build/
+app-android/.idea/
+app-android/local.properties
+*.iml
+.kotlin/
+
+# Arduino
+firmware/**/build/
+
+# Senha do Wi-Fi do óculos: fica só na máquina local (modelo público:
+# firmware/eyecam_firmware/segredos.exemplo.h)
+firmware/**/segredos.h
+
+# Backups locais (ex.: eyecam_handoff.zip, que contém a senha)
+*.zip
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store

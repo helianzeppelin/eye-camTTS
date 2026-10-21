@@ -67,6 +67,13 @@ data class CaixaNormalizada(
  * Exigir os dois evita dois falsos positivos: caixas paradas com texto
  * variando (imagem instável) e texto igual com caixas deslocando (câmera
  * em movimento lento sobre texto repetitivo).
+ *
+ * Origem: os testes de estabilidade textual e geométrica são adaptados das
+ * funções `_v2_texts_stable` e `_detection_boxes_stable` do projeto
+ * GameSentenceMiner (https://github.com/bpwhelan/GameSentenceMiner, arquivo
+ * GameSentenceMiner/ocr/gsm_ocr.py), distribuído sob a GPL-3.0. A
+ * similaridade usa Levenshtein em vez do SequenceMatcher do original, que
+ * não existe na biblioteca padrão do Kotlin.
  */
 object Estabilidade {
 

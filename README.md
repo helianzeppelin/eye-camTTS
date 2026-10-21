@@ -186,3 +186,9 @@ bancada (`PlanoTestesTest`, `RegistroTestesTest`).
 | Android pede para conectar a cada leitura | Firmware anterior à v5.5 (não informa o BSSID em `/info`): gravar a v5.5 |
 | App manda conectar à mão no Android 10+ | App compilado sem o `segredos.h`: criar o arquivo e recompilar |
 | App lê, mas não fala | Instalar a voz em português (Brasil) nas configurações de texto para voz |
+
+## Licença
+
+[GPL-3.0](LICENSE). O portão de estabilidade (`Estabilidade.kt`) adapta
+funções do [GameSentenceMiner](https://github.com/bpwhelan/GameSentenceMiner),
+também GPL-3.0.

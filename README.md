@@ -32,7 +32,7 @@ O óculos cria a rede `EyeCam_01`. Rotas principais: `/capture` (foto JPEG),
 
 ## App
 
-**Pelo APK:** baixe o `eyecam.apk` na página de Releases e instale no celular
+**Pelo APK:** baixe o [`apk/eyecam.apk`](apk/eyecam.apk) e instale no celular
 (Android 8 ou superior). Conecte o celular à rede `EyeCam_01` nas
 configurações de Wi-Fi antes de usar.
 

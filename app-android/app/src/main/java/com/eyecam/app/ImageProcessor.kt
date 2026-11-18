@@ -12,19 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.pow
 
-/**
- * Configuração de quais operações de tratamento estão ativas.
- * Permite ligar/desligar cada etapa para testes experimentais (ablação).
- *
- * Padrão: TUDO DESLIGADO, ou seja, a imagem vai crua para o ML Kit. Os testes
- * com a câmera virtual mostraram que o OCR neural lê melhor a imagem crua:
- * a limiarização e a morfologia reduziram o acerto em imagens boas e médias
- * (ex.: 99% -> 33% com o antigo padrão cinza+blur+limiar+dilatação). As
- * operações continuam disponíveis para o estudo comparativo do TCC.
- *
- * @param engrossarTracos engrossa as letras pretas (erosão 2x2)
- * @param removerPontos remove pontos pretos isolados (fechamento 2x2)
- */
+/** Configuração de quais operações de tratamento estão ativas. */
 data class ConfigProcessamento(
     val grayscale: Boolean = false,
     val blur: Boolean = false,
@@ -36,8 +24,8 @@ data class ConfigProcessamento(
 )
 
 /**
- * Resultado do processamento: a imagem tratada + a variância do Laplaciano
- * (medida de nitidez/foco).
+ * Resultado do processamento: a imagem tratada + a variância do Laplaciano (medida de
+ * nitidez/foco).
  */
 data class ResultadoProcessamento(
     val bitmap: Bitmap,
@@ -45,19 +33,12 @@ data class ResultadoProcessamento(
 )
 
 /**
- * Faz o pré-processamento da imagem com OpenCV, etapa por etapa,
- * conforme a configuração escolhida.
- *
- * As funções são suspend e rodam em Dispatchers.Default: em UXGA o OpenCV
- * leva centenas de milissegundos, e na thread principal isso congelava a
- * tela (inclusive o indicador de progresso) e inflava os tempos medidos.
+ * Faz o pré-processamento da imagem com OpenCV, etapa por etapa, conforme a configuração
+ * escolhida.
  */
 object ImageProcessor {
 
-    /**
-     * Mede a nitidez da imagem pela variância do Laplaciano.
-     * Valor baixo = imagem borrada. Valor alto = imagem nítida.
-     */
+    /** Mede a nitidez da imagem pela variância do Laplaciano. */
     suspend fun medirNitidez(bitmap: Bitmap): Double = withContext(Dispatchers.Default) {
         val mat = Mat()
         Utils.bitmapToMat(bitmap, mat)
@@ -84,9 +65,23 @@ object ImageProcessor {
     }
 
     /**
-     * Processa a imagem aplicando as operações ativadas na configuração.
-     * Retorna o bitmap processado + a variância do Laplaciano.
+     * Nitidez (variância do Laplaciano) só do centro da imagem: o retângulo central com
+     * [fracao] da largura e da altura.
      */
+    suspend fun medirNitidezCentro(bitmap: Bitmap, fracao: Double = 0.4): Double {
+        val largura = (bitmap.width * fracao).toInt().coerceAtLeast(1)
+        val altura = (bitmap.height * fracao).toInt().coerceAtLeast(1)
+        val centro = Bitmap.createBitmap(
+            bitmap, (bitmap.width - largura) / 2, (bitmap.height - altura) / 2, largura, altura
+        )
+        return try {
+            medirNitidez(centro)
+        } finally {
+            if (centro !== bitmap) centro.recycle()
+        }
+    }
+
+    /** Processa a imagem aplicando as operações ativadas na configuração. */
     suspend fun processar(
         bitmap: Bitmap,
         config: ConfigProcessamento
@@ -98,8 +93,7 @@ object ImageProcessor {
         val mat = Mat()
         Utils.bitmapToMat(bitmap, mat)
 
-        // 1. RESIZE (upscale) - aplicado primeiro para as outras operações
-        //    trabalharem na imagem ampliada
+        // 1.
         if (config.resize) {
             val novoTamanho = Size(
                 mat.cols() * config.fatorResize,
@@ -108,10 +102,7 @@ object ImageProcessor {
             Imgproc.resize(mat, mat, novoTamanho, 0.0, 0.0, Imgproc.INTER_CUBIC)
         }
 
-        // 2. GRAYSCALE - converte para tons de cinza
-        //    Utils.bitmapToMat entrega o Mat em RGBA. Com COLOR_BGR2GRAY (usado
-        //    até a revisão de 10/2026) os pesos do vermelho e do azul ficavam
-        //    trocados; por isso todas as conversões usam COLOR_RGBA2GRAY.
+        // 2.
         if (config.grayscale) {
             Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY)
         }
@@ -121,8 +112,7 @@ object ImageProcessor {
             Imgproc.GaussianBlur(mat, mat, Size(5.0, 5.0), 0.0)
         }
 
-        // 4. THRESHOLD ADAPTATIVO - binariza compensando iluminação
-        //    Só funciona em imagem de 1 canal (cinza), então garante grayscale
+        // 4.
         if (config.threshold) {
             if (mat.channels() > 1) {
                 Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY)
@@ -138,16 +128,8 @@ object ImageProcessor {
         }
 
         // ATENÇÃO À POLARIDADE nas duas operações morfológicas abaixo.
-        // Depois do limiar o texto é PRETO (0) sobre fundo BRANCO (255). Na
-        // OpenCV, dilate é um filtro de MÁXIMO e erode de MÍNIMO: quem
-        // "cresce" na dilatação é o branco, ou seja, o fundo. Até a revisão
-        // de 10/2026 o app usava dilate para "engrossar" e MORPH_OPEN para
-        // "limpar ruído", e o efeito era o oposto: a dilatação afinava as
-        // letras (removia ~37% dos pixels pretos nos testes) e a abertura
-        // apagava detalhes brancos dentro das letras.
 
-        // 5. REMOVER PONTOS - fechamento (dilata e depois erode): pontos
-        //    pretos menores que o elemento estruturante somem, letras ficam
+        // 5.
         if (config.removerPontos) {
             if (mat.channels() > 1) {
                 Imgproc.cvtColor(mat, mat, Imgproc.COLOR_RGBA2GRAY)
@@ -169,13 +151,13 @@ object ImageProcessor {
             Imgproc.erode(mat, mat, kernel)
         }
 
-        // Converte Mat -> Bitmap de volta
-        // Precisa garantir que o bitmap de saída tenha o tipo certo
+        // Converte Mat -> Bitmap de volta Precisa garantir que o bitmap de saída tenha o
+        // tipo certo
         val bitmapSaida = Bitmap.createBitmap(
             mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888
         )
-        // Se a imagem está em cinza (1 canal), converte de volta pra cor
-        // para o Bitmap conseguir exibir
+        // Se a imagem está em cinza (1 canal), converte de volta pra cor para o Bitmap
+        // conseguir exibir
         if (mat.channels() == 1) {
             val matColorido = Mat()
             Imgproc.cvtColor(mat, matColorido, Imgproc.COLOR_GRAY2RGBA)
@@ -190,12 +172,7 @@ object ImageProcessor {
         ResultadoProcessamento(bitmapSaida, variancia)
     }
 
-    /**
-     * Amplia a imagem por interpolação bicúbica, preservando as cores.
-     *
-     * Não cria detalhe novo, mas dá ao detector de texto do OCR letras do
-     * tamanho que ele espera; ver AmpliacaoAdaptativa para os números.
-     */
+    /** Amplia a imagem por interpolação bicúbica, preservando as cores. */
     suspend fun ampliar(bitmap: Bitmap, fator: Double): Bitmap = withContext(Dispatchers.Default) {
         val origem = Mat()
         Utils.bitmapToMat(bitmap, origem)

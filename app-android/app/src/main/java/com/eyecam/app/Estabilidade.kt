@@ -5,15 +5,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Caixa delimitadora com coordenadas NORMALIZADAS entre 0.0 e 1.0.
- *
- * Por que normalizar: o Eye-cam compara quadros capturados em resoluções
- * diferentes (sondagem em QVGA, captura final em UXGA). Em pixels, a mesma
- * região teria números completamente diferentes em cada resolução. Em
- * coordenadas relativas ao tamanho da imagem, a comparação passa a ser
- * independente de resolução.
- */
+/** Caixa delimitadora com coordenadas NORMALIZADAS entre 0.0 e 1.0. */
 data class CaixaNormalizada(
     val esquerda: Double,
     val topo: Double,
@@ -29,10 +21,7 @@ data class CaixaNormalizada(
     val area: Double get() = largura * altura
 
     companion object {
-        /**
-         * Converte um Rect em pixels (como o ML Kit devolve) para coordenadas
-         * normalizadas. Retorna null se o retângulo for degenerado.
-         */
+        /** Converte um Rect em pixels (como o ML Kit devolve) para coordenadas normalizadas. */
         fun de(rect: Rect, larguraImagem: Int, alturaImagem: Int): CaixaNormalizada? {
             if (larguraImagem <= 0 || alturaImagem <= 0) return null
             if (rect.right <= rect.left || rect.bottom <= rect.top) return null
@@ -81,39 +70,25 @@ object Estabilidade {
     const val LIMIAR_SIMILARIDADE_PADRAO = 90
 
     /**
-     * Tolerância na comparação de caixas, em fração da imagem.
-     * 0.02 = a caixa pode se deslocar até 2% da dimensão da imagem.
+     * Tolerância na comparação de caixas, em fração da imagem. 0.02 = a caixa pode se
+     * deslocar até 2% da dimensão da imagem.
      */
     const val TOLERANCIA_CAIXA_PADRAO = 0.02
 
-    // Rejeição rápida por diferença de comprimento, antes de calcular
-    // similaridade (que é caro). Se os textos têm tamanhos muito diferentes,
-    // não há chance de serem o mesmo conteúdo.
+    // Rejeição rápida por diferença de comprimento, antes de calcular similaridade (que é
+    // caro).
     private const val DELTA_ABSOLUTO_MINIMO = 2
     private const val DELTA_RELATIVO = 0.10
 
     // Acima deste tamanho, a comparação caractere a caractere fica lenta.
-    // Textos longos são truncados: os primeiros caracteres já bastam para
-    // decidir estabilidade.
     private const val LIMITE_COMPARACAO = 1200
 
     // ========================================================================
     // NORMALIZAÇÃO
     // ========================================================================
     /**
-     * Prepara um texto para comparação: mantém apenas letras, dígitos e
-     * espaços; colapsa espaços múltiplos; converte para minúsculas.
-     *
-     * Por que descartar a pontuação: lixo de OCR é majoritariamente
-     * pontuação. Duas leituras ruins e sem relação podem compartilhar
-     * muitos ".", ",", "-" e parecer artificialmente parecidas, inflando a
-     * similaridade e fazendo o sistema aceitar um quadro ruim como estável.
-     *
-     * Por que minúsculas: o OCR troca maiúscula por minúscula com
-     * frequência ("PREFÁCIo"), e isso não indica instabilidade da imagem.
-     *
-     * Acentos são preservados: em português eles carregam informação real,
-     * e errar acento É sinal de leitura instável.
+     * Prepara um texto para comparação: mantém apenas letras, dígitos e espaços; colapsa
+     * espaços múltiplos; converte para minúsculas.
      */
     fun normalizar(texto: String): String {
         val construtor = StringBuilder(texto.length)
@@ -128,11 +103,11 @@ object Estabilidade {
                     espacoPendente = false
                     construtor.append(caractere)
                 }
-                // Qualquer separador (espaço, quebra de linha, tabulação)
-                // vira um único espaço pendente
+                // Qualquer separador (espaço, quebra de linha, tabulação) vira um único
+                // espaço pendente
                 caractere.isWhitespace() -> espacoPendente = true
-                // Pontuação e símbolos são descartados sem gerar espaço,
-                // para que "co-lheita" e "colheita" fiquem iguais
+                // Pontuação e símbolos são descartados sem gerar espaço, para que "co-
+                // lheita" e "colheita" fiquem iguais
                 else -> { }
             }
         }
@@ -144,11 +119,8 @@ object Estabilidade {
     // SIMILARIDADE
     // ========================================================================
     /**
-     * Distância de Levenshtein: número mínimo de inserções, remoções e
-     * substituições de caracteres para transformar um texto no outro.
-     *
-     * Implementação com duas linhas em vez da matriz completa, para não
-     * alocar memória proporcional ao produto dos comprimentos.
+     * Distância de Levenshtein: número mínimo de inserções, remoções e substituições de
+     * caracteres para transformar um texto no outro.
      */
     fun distanciaLevenshtein(a: String, b: String): Int {
         if (a == b) return 0
@@ -193,13 +165,7 @@ object Estabilidade {
         return anterior[curto.length]
     }
 
-    /**
-     * Similaridade entre dois textos, de 0 a 100.
-     *
-     * Os textos são normalizados antes da comparação. Serve tanto para o
-     * portão de estabilidade quanto para medir a taxa de acerto do OCR
-     * contra um texto de referência conhecido.
-     */
+    /** Similaridade entre dois textos, de 0 a 100. */
     fun similaridade(a: String, b: String): Double {
         val normA = normalizar(a).take(LIMITE_COMPARACAO)
         val normB = normalizar(b).take(LIMITE_COMPARACAO)
@@ -217,15 +183,7 @@ object Estabilidade {
     // ========================================================================
     // ESTABILIDADE TEXTUAL
     // ========================================================================
-    /**
-     * Decide se dois textos consecutivos representam a mesma leitura.
-     *
-     * Sequência de três testes, do mais barato ao mais caro:
-     *   1. Textos vazios nunca são considerados estáveis
-     *   2. Textos idênticos (após normalizar) são estáveis
-     *   3. Diferença grande de comprimento descarta sem calcular distância
-     *   4. Só então calcula a similaridade e compara com o limiar
-     */
+    /** Decide se dois textos consecutivos representam a mesma leitura. */
     fun textosEstaveis(
         anterior: String,
         novo: String,
@@ -260,12 +218,8 @@ object Estabilidade {
     // ESTABILIDADE GEOMÉTRICA
     // ========================================================================
     /**
-     * Ordena as caixas de forma determinística (de cima para baixo, da
-     * esquerda para a direita), para que a comparação entre quadros
-     * compare as mesmas caixas.
-     *
-     * Sem isso, a mesma cena poderia gerar as caixas em ordens diferentes
-     * e a comparação falharia sem motivo.
+     * Ordena as caixas de forma determinística (de cima para baixo, da esquerda para a
+     * direita), para que a comparação entre quadros compare as mesmas caixas.
      */
     fun ordenar(caixas: List<CaixaNormalizada>): List<CaixaNormalizada> {
         return caixas.sortedWith(
@@ -273,9 +227,7 @@ object Estabilidade {
         )
     }
 
-    /**
-     * Compara duas caixas coordenada por coordenada.
-     */
+    /** Compara duas caixas coordenada por coordenada. */
     fun caixasProximas(
         a: CaixaNormalizada,
         b: CaixaNormalizada,
@@ -287,19 +239,7 @@ object Estabilidade {
                abs(a.base - b.base) <= tolerancia
     }
 
-    /**
-     * Decide se o conjunto de caixas está estável entre dois quadros.
-     *
-     * Exige que a QUANTIDADE de caixas seja igual e que CADA caixa esteja
-     * dentro da tolerância. Comparar caixa por caixa, e não apenas a caixa
-     * que engloba todas, é essencial: a caixa-união pode ficar estável
-     * enquanto as caixas internas se deslocam — por exemplo quando a câmera
-     * gira levemente sobre o próprio eixo, mantendo a área coberta mas
-     * mudando a posição de cada linha de texto.
-     *
-     * As listas são ordenadas internamente, então a ordem de entrada não
-     * importa.
-     */
+    /** Decide se o conjunto de caixas está estável entre dois quadros. */
     fun caixasEstaveis(
         anteriores: List<CaixaNormalizada>,
         novas: List<CaixaNormalizada>,
@@ -320,13 +260,7 @@ object Estabilidade {
         return true
     }
 
-    /**
-     * Deslocamento máximo observado entre os dois conjuntos de caixas,
-     * em fração da imagem. Útil para diagnóstico: mostra o quanto a câmera
-     * se moveu, mesmo quando o resultado é considerado estável.
-     *
-     * Retorna null quando os conjuntos não são comparáveis.
-     */
+    /** Deslocamento máximo observado entre os dois conjuntos de caixas, em fração da imagem. */
     fun deslocamentoMaximo(
         anteriores: List<CaixaNormalizada>,
         novas: List<CaixaNormalizada>
@@ -352,9 +286,7 @@ object Estabilidade {
     }
 }
 
-/**
- * Resultado de uma avaliação de estabilidade.
- */
+/** Resultado de uma avaliação de estabilidade. */
 data class ResultadoEstabilidade(
     val estavel: Boolean,
     val motivo: String,
@@ -372,31 +304,15 @@ data class ResultadoEstabilidade(
 }
 
 /**
- * Avaliador com estado: recebe amostras sucessivas e informa quando a cena
- * está estável o suficiente para valer uma captura em alta resolução.
- *
- * Uso previsto:
- *   val avaliador = AvaliadorEstabilidade()
- *   repeat(maxTentativas) {
- *       val r = OcrService.reconhecerComCaixas(quadroBarato)
- *       val veredito = avaliador.avaliar(r.texto, r.caixas)
- *       if (veredito.estavel) { capturarEmAltaResolucao(); return }
- *   }
- *
- * @param limiarSimilaridade similaridade mínima entre textos (0-100)
- * @param toleranciaCaixa deslocamento tolerado das caixas (fração da imagem)
- * @param amostrasNecessarias quantas amostras consecutivas estáveis são
- *        exigidas. Duas é o mínimo útil; três é mais conservador e reduz
- *        falsos positivos ao custo de mais uma sondagem.
+ * Avaliador com estado: recebe amostras sucessivas e informa quando a cena está estável o
+ * suficiente para valer uma captura em alta resolução.
  */
 class AvaliadorEstabilidade(
     private val limiarSimilaridade: Int = Estabilidade.LIMIAR_SIMILARIDADE_PADRAO,
     private val toleranciaCaixa: Double = Estabilidade.TOLERANCIA_CAIXA_PADRAO,
     private val amostrasNecessarias: Int = 2,
-    // Quando a resolução de sondagem é baixa, o texto reconhecido vira ruído
-    // aleatório e nunca se repete entre quadros — o portão jamais fecharia.
-    // Nesses casos, desligar o sinal textual deixa a decisão apenas com a
-    // geometria das caixas, que tolera resolução menor.
+    // Quando a resolução de sondagem é baixa, o texto reconhecido vira ruído aleatório e
+    // nunca se repete entre quadros — o portão jamais fecharia.
     private val exigirTexto: Boolean = true
 ) {
     private var textoAnterior: String? = null
@@ -410,9 +326,7 @@ class AvaliadorEstabilidade(
         consecutivas = 0
     }
 
-    /**
-     * Avalia uma nova amostra contra a anterior.
-     */
+    /** Avalia uma nova amostra contra a anterior. */
     fun avaliar(texto: String, caixas: List<CaixaNormalizada>): ResultadoEstabilidade {
         // Nada detectado: não há como avaliar, e o histórico perde sentido
         if (caixas.isEmpty() || Estabilidade.normalizar(texto).isEmpty()) {
@@ -476,8 +390,7 @@ class AvaliadorEstabilidade(
             )
         }
 
-        // Instável: a contagem volta a 1, porque esta amostra passa a ser
-        // a nova referência
+        // Instável: a contagem volta a 1, porque esta amostra passa a ser a nova referência
         consecutivas = 1
 
         val motivo = when {

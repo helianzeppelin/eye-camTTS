@@ -11,26 +11,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.max
 
-/**
- * Abre uma imagem da galeria do celular para o modo desenvolvedor.
- *
- * Serve para separar o PROGRAMA da CÂMERA nos testes:
- *   - imagens de teste prontas (por exemplo, as da câmera virtual) passam
- *     pelo mesmo tratamento e pelo mesmo ML Kit do app, sem o óculos;
- *   - uma foto da página de teste tirada com a câmera do próprio celular
- *     mostra até onde o programa chega com uma câmera boa. Se ela é lida e
- *     a foto do óculos não, o limite está na captura.
- */
-// android.media.ExifInterface tinha falhas só até o Android 7.0 (API 24-25);
-// o app exige API 26+, então a versão do sistema basta e evita mais uma
-// dependência (androidx.exifinterface)
+/** Abre uma imagem da galeria do celular para o modo desenvolvedor. */
+// android.media.ExifInterface tinha falhas só até o Android 7.0 (API 24-25); o app exige
+// API 26+, então a versão do sistema basta e evita mais uma dependência
+// (androidx.exifinterface)
 @SuppressLint("ExifInterface")
 object ImagemGaleria {
 
     /**
-     * Maior lado da imagem carregada. 2592 px é o lado de 5 MP da OV5640:
-     * mantém fotos de celular (12 MP ou mais) comparáveis às do óculos e
-     * evita bitmaps de dezenas de megabytes.
+     * Maior lado da imagem carregada. 2592 px é o lado de 5 MP da OV5640: mantém fotos de
+     * celular (12 MP ou mais) comparáveis às do óculos e evita bitmaps de dezenas de
+     * megabytes.
      */
     private const val DIMENSAO_MAXIMA = 2592
 
@@ -61,8 +52,7 @@ object ImagemGaleria {
                 )
             }
 
-            // 4. Rotação gravada no EXIF: fotos de celular costumam vir
-            //    "deitadas", e o OCR precisa do texto na horizontal
+            // 4.
             val graus = resolvedor.openInputStream(uri)?.use { rotacaoExif(ExifInterface(it)) } ?: 0
             if (graus == 0) {
                 bitmap

@@ -1,208 +1,22 @@
 /*
- * ============================================================================
- * Eye-cam - Óculos Assistivo para Leitura de Texto
- * ============================================================================
+ * Eye-cam: firmware do óculos (ESP32-S3 N16R8 + câmera OV5640 com autofoco)
+ * Versão 5.6.4
  *
- * Firmware do módulo ESP32-S3-CAM N16R8 + OV5640 AF (autofoco)
- * VERSÃO 5.6.2 - Configuração da câmera zerada (correção do FB-OVF)
+ * Cria a rede Wi-Fi do óculos e entrega fotos JPEG ao aplicativo sob demanda.
  *
- * ----------------------------------------------------------------------------
- * MUDANÇAS DA v5.6.1 PARA A v5.6.2
- * ----------------------------------------------------------------------------
+ * Biblioteca: "OV5640 Auto Focus for ESP32 Camera" (Library Manager)
+ * Senha do Wi-Fi: copie segredos.exemplo.h para segredos.h e defina EYECAM_AP_SENHA
+ * Placa: ESP32S3 Dev Module, Flash 16MB, partição "16M Flash (3MB APP/9.9MB FATFS)",
+ *        PSRAM OPI, USB CDC On Boot: Enabled
  *
- *   Com a v5.6.1 o boot ficou limpo e o foco travou, mas TODA foto falhava,
- *   com dezenas de FB-OVF, mesmo a 10 MHz e em SVGA, em que os dados chegam
- *   devagar. A causa não era o clock:
- *
- *   1. A ESTRUTURA camera_config_t NÃO ERA ZERADA. Os campos que o código não
- *      preenchia ficavam com lixo da memória. O driver do núcleo 3.3.x tem o
- *      campo jpeg_buffer_size (tamanho do buffer da foto; 0 = padrão): com
- *      lixo nele, o buffer saía de tamanho aleatório e toda foto transbordava.
- *      Agora "camera_config_t config = {}" zera tudo.
- *
- *   2. BUFFER INFORMADO DIRETAMENTE (jpeg_buffer_size = 1,2 MB, para 5 MP).
- *      A câmera inicia em XGA, a resolução de trabalho, como na v5.2. Iniciar
- *      em QSXGA só para dimensionar o buffer (v5.4) deixou de ser preciso.
- *
- *   3. FOCO: 4 s por tentativa (eram 2,5 s). A 10 MHz o foco levou 2,0–2,4 s,
- *      e a primeira tentativa às vezes esgotava o tempo.
- *
- *   O XCLK continua em 10 MHz, por precaução: a hipótese da v5.6.1 (20 MHz
- *   rápido demais para a cópia do driver) não foi confirmada, porque o
- *   buffer errado causava FB-OVF em qualquer clock. Pode voltar a ser
- *   testado com o buffer certo (foco mais rápido).
- *
- * ----------------------------------------------------------------------------
- * MUDANÇAS DA v5.6 PARA A v5.6.1
- * ----------------------------------------------------------------------------
- *
- *   No primeiro teste da v5.6 na placa (núcleo ESP32 3.3.12), o log encheu de
- *   "cam_hal: FB-OVF" a partir de "Ajustando XCLK: 10 -> 20 MHz" e não parou
- *   mais, nem com a câmera parada; o Wi-Fi ficou lento e nenhuma foto saía.
- *
- *   1. XCLK DE 10 MHz EM TODAS AS RESOLUÇÕES. No driver deste núcleo o modo
- *      PSRAM DMA vem desligado: o processador copia cada pedaço do quadro
- *      para a PSRAM. A 20 MHz o sensor manda o dobro de dados por segundo
- *      (no driver da OV5640 o clock de pixel é proporcional ao XCLK) e a
- *      cópia não acompanha: o fim do quadro se perde, os quadros se somam e
- *      o buffer transborda sem parar. 10 MHz já funcionava em UXGA (v5.2).
- *      O custo é um quadro mais lento em resolução baixa, o que pode alongar
- *      o foco: medir no teste F3.
- *
- *   2. A CONTAGEM DE FB-OVF SÓ CONTA. Na v5.6 ela repassava cada caractere à
- *      UART (115200 baud, ~87 µs por caractere) dentro do driver da câmera;
- *      se o canal 1 estava desligado antes, isso atrasava o driver a cada
- *      aviso. Agora o canal 1 só conta; a saída USB (canal 2) não muda.
- *
- * ----------------------------------------------------------------------------
- * MUDANÇAS DA v5.5 PARA A v5.6
- * ----------------------------------------------------------------------------
- *
- *   Os testes de bancada são feitos sem o computador, e o Serial Monitor
- *   era o único lugar onde apareciam o tempo do foco, as falhas e o FB-OVF.
- *   Agora o firmware manda esses dados ao app:
- *
- *   1. CABEÇALHOS DE MEDIÇÃO em cada resposta de /capture (também nas de
- *      erro): tempo e tentativas do foco, tempo da troca de resolução, do
- *      descarte e da captura do quadro, resolução real, clock, qualidade,
- *      número da captura desde o boot e avisos do driver da câmera.
- *
- *   2. ROTA /log: as últimas 64 mensagens do firmware, numeradas. O app pede
- *      só as novas (/log?desde=N) e as guarda junto de cada foto. A senha do
- *      Wi-Fi continua só no Serial.
- *
- *   3. CONTAGEM DO FB-OVF (experimental). O driver da câmera imprime o aviso
- *      direto na saída de console, pelo printf da ROM, sem passar pelo
- *      firmware. O firmware se instala no canal 1 dessa saída (a UART) e
- *      conta as mensagens "FB-OVF" e "cam_hal:" (na v5.6.1, sem repassá-las
- *      à UART). A saída USB usa outro canal e não muda. Validar uma vez: a
- *      contagem precisa bater com o Serial Monitor.
- *
- *   4. MOTIVO DO ÚLTIMO RESET em /info e /log: mostra se a placa reiniciou
- *      por queda de tensão (brownout), o que importa na bateria.
- *
- * ----------------------------------------------------------------------------
- * MUDANÇAS DA v5.4 PARA A v5.5
- * ----------------------------------------------------------------------------
- *
- *   1. CAMPO ap_bssid EM /info: o endereço MAC do Access Point (BSSID). O
- *      app passou a pedir a rede do óculos ao próprio Android
- *      (WifiNetworkSpecifier), em vez de exigir que o usuário a escolha nas
- *      configurações de Wi-Fi. Na primeira vez o Android pede uma
- *      confirmação; depois, se o pedido trouxer o nome da rede E o BSSID
- *      exatos, ele conecta sem perguntar. O app lê o BSSID aqui, na primeira
- *      conexão, e o guarda. Nada muda no Access Point em si.
- *
- * ----------------------------------------------------------------------------
- * MUDANÇAS DA v5.3 PARA A v5.4
- * ----------------------------------------------------------------------------
- *
- *   1. RESOLUÇÕES QXGA (2048x1536) E QSXGA (2560x1920, "5mp"). Testes com
- *      uma câmera virtual mostraram que o acerto do OCR depende sobretudo de
- *      quantos pixels a letra tem: texto de 10 pt a 30 cm fica com ~16 px
- *      por em em UXGA (no limite) e ~26 px em QSXGA (com folga). O sensor é
- *      de 5 MP e o driver aceita essas resoluções; a v5.3 parava em UXGA.
- *      O buffer JPEG agora é reservado para QSXGA (~983 KB, em PSRAM). Se
- *      o init em 5 MP falhar nesta placa, o firmware volta sozinho ao buffer
- *      UXGA e recusa capturas maiores (campo resolucao_maxima em /info).
- *
- *   2. ROTA /tune PARA A BANCADA DE TESTES. Ajusta nitidez (sharpness),
- *      redução de ruído (denoise), contraste e qualidade do JPEG sem
- *      regravar o firmware, e devolve os valores em uso. Os mesmos valores
- *      aparecem em /info, para registro nos testes.
- *
- * ----------------------------------------------------------------------------
- * MUDANÇAS DA v5.2 PARA A v5.3
- * ----------------------------------------------------------------------------
- *
- *   1. BUFFER JPEG PARA UXGA. O driver da câmera reserva o buffer JPEG uma
- *      única vez, no esp_camera_init, com largura x altura / 5 bytes da
- *      resolução de init (CONFIG_CAMERA_JPEG_MODE_FRAME_SIZE_AUTO). A v5.2
- *      iniciava em XGA, deixando ~157 KB: uma foto UXGA de página cheia de
- *      texto (muito detalhe = JPEG maior) podia não caber, e o driver também
- *      acusa FB-OVF nesse caso. Isso explicava o FB-OVF residual em UXGA
- *      mesmo com o XCLK a 10 MHz. Agora o init é feito em UXGA (~384 KB) e a
- *      resolução cai para a padrão logo em seguida. É o mesmo procedimento
- *      do exemplo oficial CameraWebServer ("init with UXGA resolution ...
- *      for larger pre-allocated frame buffer").
- *
- *   2. CAPTURA SOB DEMANDA (GRAB_WHEN_EMPTY) COM UM ÚNICO BUFFER. Com
- *      GRAB_LATEST a câmera captura sem parar, mantendo a PSRAM ocupada e
- *      gerando FB-OVF em segundo plano. Com GRAB_WHEN_EMPTY ela só captura
- *      quando um buffer é liberado; porém, segundo o esp_camera.h, "the
- *      first 'fb_count' frames might be old". Com 2 buffers e 1 descarte
- *      (como a v5.2 fazia em alta resolução), a foto sairia ANTERIOR ao
- *      autofoco. Com 1 buffer, descartar 1 quadro sempre basta.
- *
- *   3. AP_MAX_CONN = 1: só o celular do usuário se conecta ao óculos.
- *
- *   4. Removido o cabeçalho Content-Type duplicado na resposta de /capture.
- *
- * ----------------------------------------------------------------------------
- * HISTÓRICO: O PROBLEMA RESOLVIDO NA v5.2
- * ----------------------------------------------------------------------------
- *
- * Em UXGA (1600x1200), o log era inundado por "cam_hal: FB-OVF" e a captura
- * falhava. FB-OVF significa Frame Buffer Overflow: o sensor entrega pixels
- * mais rápido do que o ESP32 consegue gravar na PSRAM, e o buffer transborda.
- *
- * Causa: o clock da câmera (XCLK) estava fixo em 20 MHz. Esse valor é
- * adequado para a OV2640 (2MP), mas a OV5640 em UXGA gera cerca de 4x mais
- * dados por frame. Somado à disputa por banda de PSRAM com o Wi-Fi em modo
- * Access Point, o resultado é transbordo constante.
- *
- * Solução: XCLK DINÂMICO. O driver permite alterar o clock em tempo de
- * execução, então usamos 20 MHz nas resoluções baixas (rápido) e caímos
- * para 10 MHz apenas quando a resolução exige (SXGA e acima). O frame
- * demora mais, mas chega íntegro.
- *
- * Mudanças da v5.1 para a v5.2:
- *   1. XCLK dinâmico conforme a resolução (correção principal do FB-OVF).
- *   2. Qualidade JPEG adaptativa: arquivos menores em alta resolução,
- *      reduzindo tempo de transferência.
- *   3. Menos frames descartados em alta resolução (cada frame custa caro).
- *   4. Removido o relatório de "posição da lente": os registros lidos não
- *      correspondem à posição real do foco neste módulo, e os valores
- *      exibidos não tinham significado.
- *   5. Modo de captura configurável (GRAB_LATEST x GRAB_WHEN_EMPTY) para
- *      o caso de o FB-OVF persistir.
- *
- * ----------------------------------------------------------------------------
- * PRÉ-REQUISITOS
- * ----------------------------------------------------------------------------
- *
- * BIBLIOTECA: "OV5640 Auto Focus for ESP32 Camera" (Library Manager)
- *
- * SENHA DO WI-FI: copie segredos.exemplo.h para segredos.h, nesta mesma
- *   pasta, e defina EYECAM_AP_SENHA.
- *
- * PLACA (ESP32-S3 N16R8):
- *   Board: ESP32S3 Dev Module | Flash Size: 16MB (128Mb)
- *   Partition: 16M Flash (3MB APP/9.9MB FATFS) | PSRAM: OPI PSRAM
- *   USB CDC On Boot: Enabled | USB Mode: Hardware CDC and JTAG
- *
- * ----------------------------------------------------------------------------
- * COMANDOS HTTP
- * ----------------------------------------------------------------------------
+ * Rotas HTTP:
  *   /ping     -> "OK"
- *   /capture  -> foca e retorna a foto JPEG
+ *   /capture  -> foto JPEG  (?res=svga|xga|sxga|uxga|qxga|5mp, ?af=0 = sem focar)
  *   /focus    -> diagnóstico do autofoco
- *   /info     -> informações do dispositivo (JSON)
- *   /tune     -> ajusta e informa nitidez, ruído, contraste e qualidade (JSON)
- *   /log      -> últimas mensagens do firmware (?desde=N: só as novas)
- *
- * Parâmetros de /capture:
- *   ?res=qvga|vga|svga|xga|sxga|uxga|qxga|qsxga  (5mp = qsxga)
- *   ?af=0     -> captura sem focar (controle experimental)
- *
- * Parâmetros de /tune (todos opcionais; sem parâmetros, só informa):
- *   ?sharpness=-3..3   nitidez do ISP do sensor
- *   ?denoise=0..8      redução de ruído (0 = desligada)
- *   ?contrast=-2..2
- *   ?quality=4..63     qualidade do JPEG (menor = melhor); 0 = automática
- *   ?reset=1           volta aos valores do firmware
- *
- * ============================================================================
+ *   /info     -> estado do dispositivo (JSON)
+ *   /tune     -> ajustes de imagem e de clock (JSON; ?sharpness ?denoise ?contrast
+ *                ?quality ?xclk ?xclk_alta ?noite ?reset=1)
+ *   /log      -> últimas mensagens do firmware (?desde=N)
  */
 
 #include "esp_camera.h"
@@ -216,10 +30,6 @@
 // ============================================================================
 // CONFIGURAÇÕES DA REDE WI-FI (modo AP)
 // ============================================================================
-// A senha da rede fica em segredos.h, que NÃO vai para o GitHub (está no
-// .gitignore). Motivo: o repositório é público, e quem conhece a senha pode
-// se conectar ao óculos e capturar fotos. Na primeira instalação, copie
-// segredos.exemplo.h para segredos.h e defina uma senha própria.
 
 #if __has_include("segredos.h")
 #include "segredos.h"
@@ -227,8 +37,8 @@
 #error "Falta segredos.h: copie segredos.exemplo.h para segredos.h e defina a senha (docs/INSTALACAO.md)"
 #endif
 
-// O WPA2 exige senha de 8 a 63 caracteres; fora disso o softAP() falha
-// em tempo de execução. Melhor descobrir na compilação.
+// O WPA2 exige senha de 8 a 63 caracteres; fora disso o softAP() falha em tempo de
+// execução.
 static_assert(sizeof(EYECAM_AP_SENHA) - 1 >= 8 && sizeof(EYECAM_AP_SENHA) - 1 <= 63,
               "EYECAM_AP_SENHA precisa ter de 8 a 63 caracteres");
 
@@ -236,8 +46,7 @@ const char* AP_SSID     = "EyeCam_01";
 const char* AP_PASSWORD = EYECAM_AP_SENHA;
 const int   AP_CHANNEL  = 1;
 
-// Apenas o celular do usuário. Com mais vagas, outra pessoa que soubesse a
-// senha poderia se conectar e capturar fotos enquanto o óculos está em uso.
+// Apenas o celular do usuário.
 const int   AP_MAX_CONN = 1;
 
 // ============================================================================
@@ -247,37 +56,19 @@ const int   AP_MAX_CONN = 1;
 const framesize_t RESOLUCAO_PADRAO = FRAMESIZE_XGA;
 
 // Tamanho do buffer JPEG, em bytes, informado ao driver (jpeg_buffer_size).
-// O driver o reserva uma única vez, no esp_camera_init, e um JPEG maior que
-// ele é perdido (FB-OVF). Precisa caber a MAIOR foto que o app pede: QSXGA
-// ("5mp", 2560x1920, o sensor inteiro). A regra padrão do driver daria
-// largura x altura / 5 = 983 KB; uma página cheia de texto tem muito detalhe
-// e gera JPEG grande, por isso a folga. Fica na PSRAM (8 MB).
-//
-// Até a v5.6.1 o tamanho vinha da resolução de init (a câmera iniciava em
-// QSXGA só para isso). Com este campo, ela inicia direto na resolução de
-// trabalho, como na v5.2.
 const size_t BUFFER_JPEG_5MP  = 1200 * 1024;
 // Reserva, se a PSRAM não comportar o de 5 MP: só até UXGA
 const size_t BUFFER_JPEG_UXGA = 1600 * 1200 / 5;
 
 // ---------------------------------------------------------------------------
-// CLOCK DA CÂMERA (XCLK) - correção do FB-OVF
+// CLOCK DA CÂMERA (XCLK)
 // ---------------------------------------------------------------------------
-// Clock alto = frames rápidos, mas mais dados por segundo para a PSRAM.
-// Acima do que a cópia do driver acompanha, o buffer transborda (FB-OVF).
-//
-// v5.6.1: 10 MHz também em resolução baixa, por precaução (ver o cabeçalho:
-// o FB-OVF da v5.6 vinha do buffer de tamanho errado, não do clock). A 10 MHz
-// o foco em SVGA leva ~2 s; com 20 MHz (v5.2) levava ~1 s. Para testar de
-// novo, volte XCLK_PADRAO_MHZ a 20, ou 16 (o driver da OV5640 tem um ajuste
-// próprio para 16 MHz). Se o FB-OVF aparecer em 5 MP, reduza
-// XCLK_ALTA_RES_MHZ para 8.
-// ---------------------------------------------------------------------------
-const int XCLK_PADRAO_MHZ   = 10;   // resoluções até XGA
-const int XCLK_ALTA_RES_MHZ = 10;   // SXGA e acima
+const int XCLK_PADRAO_MHZ = 10;
+const int XCLK_MINIMO_MHZ = 6;    // faixa de entrada da OV5640: 6 a 27 MHz
+const int XCLK_MAXIMO_MHZ = 24;
 
-// A partir desta resolução, o firmware considera "alta resolução" e aplica
-// o clock reduzido, a qualidade adaptativa e menos descartes de frame.
+// A partir desta resolução, o firmware considera "alta resolução" e aplica o clock de alta
+// resolução, a qualidade adaptativa e menos descartes de quadro.
 const framesize_t LIMITE_ALTA_RES = FRAMESIZE_SXGA;
 
 // ---------------------------------------------------------------------------
@@ -289,26 +80,21 @@ const int QUALIDADE_ALTA_RES = 15;  // arquivo menor, transferência mais rápid
 // ---------------------------------------------------------------------------
 // AJUSTES DE IMAGEM (alteráveis em tempo de execução pela rota /tune)
 // ---------------------------------------------------------------------------
-// No boot nada é alterado: o sensor fica com os valores de fábrica do driver
-// (a nitidez de fábrica da OV5640 é AUTOMÁTICA; chamar set_sharpness(0) a
-// trocaria por manual). A bancada de testes usa /tune para comparar, por
-// exemplo, nitidez de fábrica x +2, sem regravar o firmware.
 const int AJUSTE_FABRICA = -99;   // marcador de "não alterado"
 
 // ---------------------------------------------------------------------------
-// MODO DE CAPTURA
+// MODO NOTURNO DO SENSOR (registro 0x3A00, bit 2, da OV5640)
 // ---------------------------------------------------------------------------
-// true  = CAMERA_GRAB_LATEST: a câmera captura continuamente e entrega o
-//         frame mais recente. Melhor latência, mas carga constante na PSRAM.
-//         Usa 2 buffers.
-// false = CAMERA_GRAB_WHEN_EMPTY: a câmera só captura quando um buffer é
-//         liberado. Muito menos carga de memória. Usa 1 buffer, para que
-//         descartar 1 quadro garanta uma foto do instante atual.
-//
-// Se a foto voltar a mostrar a cena de instantes antes (teste do
-// cronômetro), aumente os descartes em handler_capture.
+const bool MODO_NOTURNO_PADRAO = false;
+const uint16_t REG_AEC_CTRL00 = 0x3A00;
+const uint8_t  BIT_MODO_NOTURNO = 0x04;
+
 // ---------------------------------------------------------------------------
-const bool USAR_GRAB_LATEST = false;
+// CAPTURA
+// ---------------------------------------------------------------------------
+const int PASSO_COMPRESSAO = 5;            // pontos a mais na qualidade (maior = menor arquivo)
+const int QUALIDADE_MAXIMA_RECUPERACAO = 30;
+const framesize_t RESOLUCAO_FOCO_RECUPERACAO = FRAMESIZE_SVGA;   // a do app
 
 // ---------------------------------------------------------------------------
 // ORIENTAÇÃO DA IMAGEM (valores confirmados experimentalmente)
@@ -317,22 +103,25 @@ const int FLIP_VERTICAL      = 1;
 const int ESPELHO_HORIZONTAL = 0;
 
 // ---------------------------------------------------------------------------
-// AUTOFOCO
+// AUTOFOCO (firmware interno da OV5640, carregado pela biblioteca de AF)
 // ---------------------------------------------------------------------------
-const bool MODO_AF_CONTINUO = false;   // false = foco único por captura
-// 4 s por tentativa: com XCLK de 10 MHz os quadros chegam na metade da
-// velocidade e o foco em SVGA levou ~2,0–2,4 s no primeiro teste da v5.6.1;
-// com 2,5 s a primeira tentativa esgotou o tempo e o foco recomeçou do zero
 const unsigned long TIMEOUT_FOCO_MS = 4000;
 const int TENTATIVAS_FOCO = 2;
+// Comandos de configuração e de consulta, que não movem a lente
+const unsigned long TIMEOUT_COMANDO_AF_MS = 500;
 
-// Registros do firmware de autofoco da OV5640
-const uint16_t REG_AF_COMANDO = 0x3022;
-const uint16_t REG_AF_STATUS  = 0x3029;
+const uint16_t REG_AF_COMANDO = 0x3022;   // CMD_MAIN
+const uint16_t REG_AF_ACK     = 0x3023;   // CMD_ACK
+const uint16_t REG_AF_PARAM0  = 0x3024;   // CMD_PARA0..CMD_PARA4 = 0x3024..0x3028
+const uint16_t REG_AF_STATUS  = 0x3029;   // FW_STATUS
 
-const uint8_t CMD_AF_UNICO      = 0x03;
-const uint8_t AF_STATUS_FOCADO  = 0x10;
-const uint8_t AF_STATUS_PRONTO  = 0x70;
+const uint8_t CMD_AF_UNICO         = 0x03;   // dispara um foco
+const uint8_t CMD_AF_RESULTADO     = 0x07;   // zonas focadas em CMD_PARA0..4 (0 = focou)
+const uint8_t CMD_AF_RELANCA_ZONAS = 0x12;   // refaz as zonas para a resolução atual
+
+// FW_STATUS: 0x10 = foco concluído (NÃO quer dizer nítido); 0x70 = ocioso, lente no
+// infinito; 0x00–0x0F e 0x80–0x8F = focando
+const uint8_t AF_STATUS_FOCADO = 0x10;
 
 // ============================================================================
 // PINOUT - ESP32-S3-CAM N16R8
@@ -369,34 +158,42 @@ String sensor_detectado = "desconhecido";
 framesize_t resolucao_atual = RESOLUCAO_PADRAO;
 int xclk_atual_mhz = XCLK_PADRAO_MHZ;
 
-// Maior resolução que o buffer reservado comporta (cai para UXGA se a PSRAM
-// não comportar o buffer de 5 MP) e o tamanho efetivamente reservado
+// Clock por faixa de resolução (alterável por /tune)
+int xclk_baixa_mhz = XCLK_PADRAO_MHZ;   // até XGA
+int xclk_alta_mhz  = XCLK_PADRAO_MHZ;   // SXGA para cima
+
+// Maior resolução que o buffer reservado comporta (cai para UXGA se a PSRAM não comportar o
+// buffer de 5 MP) e o tamanho efetivamente reservado
 framesize_t resolucao_maxima = FRAMESIZE_QSXGA;
 size_t tamanho_buffer_jpeg = BUFFER_JPEG_5MP;
 
-// Ajustes feitos por /tune. AJUSTE_FABRICA = não alterado desde o boot;
-// qualidade_manual 0 = qualidade automática por resolução.
+// Ajustes feitos por /tune.
 int nitidez_atual    = AJUSTE_FABRICA;
 int denoise_atual    = AJUSTE_FABRICA;
 int contraste_atual  = AJUSTE_FABRICA;
 int qualidade_manual = 0;
+bool modo_noturno    = MODO_NOTURNO_PADRAO;
+
+// A resolução mudou desde a última configuração das zonas de foco: o próximo foco relança
+// as zonas antes (comando 0x12)
+bool zonas_af_desatualizadas = false;
+
+int compressao_extra = 0;
+bool ajuste_sem_quadro = false;
+uint32_t recuperacoes_compressao = 0;
+uint32_t recuperacoes_reinicio = 0;
 
 // Medições do último foco (para os cabeçalhos de /capture)
 unsigned long foco_ultimo_ms = 0;
 int foco_ultimas_tentativas = 0;
+char foco_zonas[24] = "";   // resposta do comando 0x07, ex. "0,1,1,1,1"
 
-// Capturas atendidas desde o boot. Se o número voltar a 1 no meio de um
-// teste, a placa reiniciou (por exemplo, queda de tensão)
+// Capturas atendidas desde o boot.
 uint32_t capturas_desde_boot = 0;
 
 // ============================================================================
 // REGISTRO PARA O APP (rota /log)
 // ============================================================================
-// Nos testes de bancada não há computador com o Serial Monitor. Cada mensagem
-// do firmware vai para o Serial E para esta memória circular com as últimas
-// LOG_LINHAS linhas, numeradas. O app pede só as novas (/log?desde=N) e as
-// guarda junto de cada foto. Linhas fixas em vez de String: nada de alocar e
-// fragmentar a memória a cada mensagem.
 
 const int LOG_LINHAS  = 64;
 const int LOG_TAMANHO = 112;
@@ -421,22 +218,8 @@ void registra(const char* formato, ...) {
 }
 
 // ============================================================================
-// CONTAGEM DOS AVISOS DO DRIVER DA CÂMERA (experimental)
+// CONTAGEM DOS AVISOS DO DRIVER DA CÂMERA
 // ============================================================================
-// O driver imprime "cam_hal: FB-OVF" (e outros avisos "cam_hal: ...") direto
-// pelo printf da ROM, sem passar pelo firmware. Esse printf entrega cada
-// caractere a dois canais: o 1 é a UART e o 2, a USB do Serial Monitor.
-// O firmware troca a função do canal 1 por espia_console(), que só procura
-// os textos abaixo e conta. O canal 2 não é tocado: o Serial Monitor continua
-// igual.
-//
-// Não repassa nada à UART (a v5.6 repassava): escrever na UART a 115200 baud
-// leva ~87 µs por caractere, e isso acontecia dentro do driver da câmera, a
-// cada aviso, atrasando justamente a cópia que transbordava. Ninguém lê a
-// UART neste projeto (o Serial Monitor usa a USB nativa).
-//
-// Roda dentro do driver, às vezes em interrupção: fica na IRAM, usa só
-// variáveis simples e não chama nada do Arduino.
 
 volatile uint32_t ovf_total = 0;          // "FB-OVF" desde o boot
 volatile uint32_t avisos_cam_total = 0;   // linhas "cam_hal:" desde o boot
@@ -490,11 +273,9 @@ void setup() {
     esp_rom_install_channel_putc(1, espia_console);
 
     Serial.println("\n========================================");
-    registra("Eye-cam - Iniciando firmware v5.6.2");
+    registra("Eye-cam - Iniciando firmware v5.6.4");
     registra("ESP32-S3-CAM N16R8 + OV5640 AF");
-    registra("Modo de foco: %s", MODO_AF_CONTINUO ? "CONTINUO" : "UNICO (por captura)");
-    registra("Modo de captura: %s", USAR_GRAB_LATEST ? "GRAB_LATEST" : "GRAB_WHEN_EMPTY");
-    registra("Motivo do reset: %s", motivo_reset());
+    registra("Motivo do reset: %s | chip a %.1f C", motivo_reset(), temperatureRead());
     Serial.println("========================================\n");
 
     if (!inicializa_camera()) {
@@ -546,13 +327,7 @@ void loop() {
 // ============================================================================
 
 bool inicializa_camera() {
-    // "= {}" zera TODOS os campos. Sem ele, os campos que este código não
-    // preenche ficavam com lixo da memória. O driver do núcleo ESP32 3.3.x
-    // tem o campo jpeg_buffer_size (tamanho do buffer da foto; 0 = padrão):
-    // com lixo nele, o buffer saía de tamanho aleatório e TODA foto
-    // transbordava (FB-OVF), a qualquer clock e resolução. Foi a causa da
-    // falha das v5.6 e v5.6.1 na placa. Na v5.2 não aparecia, provavelmente
-    // porque o núcleo da época ainda não tinha esse campo.
+    // "= {}" zera TODOS os campos.
     camera_config_t config = {};
 
     config.pin_d0       = Y2_GPIO_NUM;
@@ -575,10 +350,9 @@ bool inicializa_camera() {
     config.ledc_channel = LEDC_CHANNEL_0;
     config.ledc_timer   = LEDC_TIMER_0;
 
-    // Inicia direto na resolução de trabalho, com o clock e a qualidade
-    // dela. O buffer é dimensionado à parte, para a maior foto (5 MP)
+    // Inicia direto na resolução de trabalho, com o clock e a qualidade dela.
     bool alta = (RESOLUCAO_PADRAO >= LIMITE_ALTA_RES);
-    xclk_atual_mhz = alta ? XCLK_ALTA_RES_MHZ : XCLK_PADRAO_MHZ;
+    xclk_atual_mhz = alta ? xclk_alta_mhz : xclk_baixa_mhz;
     config.xclk_freq_hz = xclk_atual_mhz * 1000000;
 
     config.frame_size       = RESOLUCAO_PADRAO;
@@ -587,18 +361,13 @@ bool inicializa_camera() {
     config.jpeg_buffer_size = BUFFER_JPEG_5MP;
 
     config.fb_location  = CAMERA_FB_IN_PSRAM;
-    // GRAB_WHEN_EMPTY usa 1 buffer: "the first 'fb_count' frames might be
-    // old" (esp_camera.h), então com 1 buffer basta descartar 1 quadro.
-    config.fb_count     = USAR_GRAB_LATEST ? 2 : 1;
-    config.grab_mode    = USAR_GRAB_LATEST
-                          ? CAMERA_GRAB_LATEST
-                          : CAMERA_GRAB_WHEN_EMPTY;
+    config.fb_count     = 1;
+    config.grab_mode    = CAMERA_GRAB_WHEN_EMPTY;
 
     esp_err_t err = esp_camera_init(&config);
     if (err != ESP_OK) {
-        // Rede de segurança: se a PSRAM não comportar o buffer de 5 MP, tenta
-        // com o de UXGA em vez de reiniciar em loop. As capturas acima de
-        // UXGA passam a ser recusadas (resolucao_maxima).
+        // Rede de segurança: se a PSRAM não comportar o buffer de 5 MP, tenta com o de UXGA
+        // em vez de reiniciar em loop.
         registra("[AVISO] init com buffer de 5 MP falhou (0x%x); tentando com buffer UXGA", err);
         esp_camera_deinit();
         delay(100);
@@ -612,8 +381,8 @@ bool inicializa_camera() {
     }
     tamanho_buffer_jpeg = config.jpeg_buffer_size;
 
-    registra("[INFO] XCLK: %d MHz | buffers: %d de %u KB | maior resolucao: %s",
-                  xclk_atual_mhz, (int)config.fb_count, (unsigned)(tamanho_buffer_jpeg / 1024),
+    registra("[INFO] XCLK: %d MHz | buffer: %u KB | maior resolucao: %s",
+                  xclk_atual_mhz, (unsigned)(tamanho_buffer_jpeg / 1024),
                   resolucao_maxima == FRAMESIZE_QSXGA ? "QSXGA 2560x1920" : "UXGA 1600x1200");
 
     sensor_t* sensor = esp_camera_sensor_get();
@@ -632,6 +401,15 @@ bool inicializa_camera() {
         sensor->set_hmirror(sensor, ESPELHO_HORIZONTAL);
         registra("[INFO] Orientacao: vflip=%d hmirror=%d",
                       FLIP_VERTICAL, ESPELHO_HORIZONTAL);
+
+        // Registra o que o driver deixou no sensor antes de mudar
+        if (sensor_detectado == "OV5640") {
+            int aec = sensor->get_reg(sensor, REG_AEC_CTRL00, 0xFF);
+            registra("[INFO] Modo noturno do driver: %s (0x3A00 = 0x%02X); em uso: %s",
+                     (aec >= 0 && (aec & BIT_MODO_NOTURNO)) ? "ligado" : "desligado",
+                     aec, modo_noturno ? "ligado" : "desligado");
+            aplica_modo_noturno();
+        }
     }
 
     // A câmera já está na resolução de trabalho, com o clock dela
@@ -639,12 +417,26 @@ bool inicializa_camera() {
     return true;
 }
 
+// Liga ou desliga o modo noturno da OV5640 (bit 2 do 0x3A00), conforme modo_noturno.
+void aplica_modo_noturno() {
+    sensor_t* sensor = esp_camera_sensor_get();
+    if (sensor == NULL || sensor_detectado != "OV5640") return;
+    sensor->set_reg(sensor, REG_AEC_CTRL00, BIT_MODO_NOTURNO,
+                    modo_noturno ? BIT_MODO_NOTURNO : 0);
+}
+
 // ============================================================================
-// AJUSTE DE RESOLUÇÃO (com XCLK e qualidade adaptativos)
+// AJUSTE DE RESOLUÇÃO (com XCLK e qualidade por faixa de resolução)
 // ============================================================================
-// Esta é a correção central do FB-OVF: ao subir a resolução, reduzimos o
-// clock da câmera para que a taxa de dados caiba na banda disponível de
-// PSRAM (que também está sendo usada pelo Wi-Fi).
+
+// Troca o clock da câmera.
+void troca_xclk(sensor_t* sensor, int mhz) {
+    if (mhz == xclk_atual_mhz) return;
+    registra("[INFO] Ajustando XCLK: %d -> %d MHz", xclk_atual_mhz, mhz);
+    sensor->set_xclk(sensor, LEDC_TIMER_0, mhz);
+    xclk_atual_mhz = mhz;
+    delay(100);
+}
 
 bool ajusta_resolucao(framesize_t nova) {
     sensor_t* sensor = esp_camera_sensor_get();
@@ -654,16 +446,7 @@ bool ajusta_resolucao(framesize_t nova) {
     if (nova == resolucao_atual) return true;
 
     bool alta = (nova >= LIMITE_ALTA_RES);
-    int xclk_desejado = alta ? XCLK_ALTA_RES_MHZ : XCLK_PADRAO_MHZ;
-
-    // --- Ajusta o clock ANTES de trocar a resolução ---
-    if (xclk_desejado != xclk_atual_mhz) {
-        registra("[INFO] Ajustando XCLK: %d -> %d MHz",
-                      xclk_atual_mhz, xclk_desejado);
-        sensor->set_xclk(sensor, LEDC_TIMER_0, xclk_desejado);
-        xclk_atual_mhz = xclk_desejado;
-        delay(100);
-    }
+    troca_xclk(sensor, alta ? xclk_alta_mhz : xclk_baixa_mhz);
 
     // --- Qualidade JPEG adaptativa (ou a manual, se definida por /tune) ---
     sensor->set_quality(sensor, qualidade_em_uso(alta));
@@ -671,19 +454,77 @@ bool ajusta_resolucao(framesize_t nova) {
     // --- Troca a resolução ---
     sensor->set_framesize(sensor, nova);
     resolucao_atual = nova;
+    aplica_modo_noturno();
 
-    // Tempo para o sensor reajustar exposição e balanço de branco. Sem esta
-    // pausa, as primeiras fotos após a troca saem escuras ou esverdeadas.
+    // A janela de foco foi calculada para a resolução anterior.
+    zonas_af_desatualizadas = true;
+
+    // Tempo para o sensor reajustar exposição e balanço de branco.
     delay(alta ? 500 : 300);
 
-    // Descarta frames de transição. Em alta resolução cada frame custa
-    // muito tempo, então descartamos menos.
+    // Descarta quadros de transição.
     int descartes = alta ? 1 : 3;
     for (int i = 0; i < descartes; i++) {
         camera_fb_t* fb_lixo = esp_camera_fb_get();
+        ajuste_sem_quadro = (fb_lixo == NULL);
         if (fb_lixo) esp_camera_fb_return(fb_lixo);
     }
 
+    return true;
+}
+
+// ============================================================================
+// RECUPERAÇÃO DA CÂMERA (v5.6.4)
+// ============================================================================
+
+// Exposição, ganho e tamanho do quadro no momento de uma falha.
+void registra_diagnostico_sensor() {
+    sensor_t* s = esp_camera_sensor_get();
+    if (s == NULL || sensor_detectado != "OV5640") return;
+    auto reg = [s](int r) { int v = s->get_reg(s, r, 0xFF); return v < 0 ? 0 : v; };
+    unsigned long exposicao = ((unsigned long)(reg(0x3500) & 0x0F) << 16) |
+                              ((unsigned long)reg(0x3501) << 8) | reg(0x3502);
+    unsigned vts = (reg(0x380E) << 8) | reg(0x380F);
+    unsigned extra = (reg(0x350C) << 8) | reg(0x350D);
+    unsigned ganho = ((reg(0x350A) & 0x03) << 8) | reg(0x350B);
+    registra("[DIAG] exposicao %lu linhas | VTS %u + %u | ganho %u | AEC 0x%02X | %.1f C",
+             exposicao / 16, vts, extra, ganho, reg(0x3503), temperatureRead());
+}
+
+// Reaplica no sensor os ajustes feitos por /tune: o reinício da câmera os apaga, mas as
+// variáveis continuam dizendo que estão em uso
+void reaplica_ajustes(sensor_t* s) {
+    if (nitidez_atual != AJUSTE_FABRICA)   s->set_sharpness(s, nitidez_atual);
+    if (denoise_atual != AJUSTE_FABRICA)   s->set_denoise(s, denoise_atual);
+    if (contraste_atual != AJUSTE_FABRICA) s->set_contrast(s, contraste_atual);
+}
+
+// Reinicia a câmera e o firmware de foco, foca de novo e volta a [alvo].
+bool reinicia_camera(framesize_t alvo) {
+    registra("[AVISO] Sem quadro: reiniciando a camera");
+    esp_camera_deinit();
+    delay(100);
+    if (!inicializa_camera()) {
+        registra("[ERRO] A camera nao voltou depois do reinicio");
+        return false;
+    }
+    // Pouca PSRAM livre no novo init: o firmware cai para o buffer de UXGA
+    if (alvo > resolucao_maxima) {
+        registra("[ERRO] Depois do reinicio o buffer so comporta UXGA");
+        return false;
+    }
+    sensor_t* s = esp_camera_sensor_get();
+    if (s) reaplica_ajustes(s);
+    inicializa_autofoco();
+
+    // O reinício solta a lente (foco no infinito): foca de novo onde o app foca, antes de
+    // voltar à resolução pedida
+    if (autofoco_ativo) {
+        ajusta_resolucao(RESOLUCAO_FOCO_RECUPERACAO);
+        executa_foco();
+    }
+    ajusta_resolucao(alvo);
+    registra("[INFO] Camera reiniciada; recuperacoes: %lu", (unsigned long)(recuperacoes_reinicio + 1));
     return true;
 }
 
@@ -703,6 +544,39 @@ void escreve_reg_af(uint16_t reg, uint8_t valor) {
     sensor_t* sensor = esp_camera_sensor_get();
     if (sensor == NULL) return;
     sensor->set_reg(sensor, reg, 0xFF, valor);
+}
+
+// Envia um comando que não move a lente e espera o firmware de foco confirmar (CMD_ACK de
+// volta a 0).
+bool comando_af(uint8_t comando) {
+    escreve_reg_af(REG_AF_ACK, 0x01);
+    escreve_reg_af(REG_AF_COMANDO, comando);
+    unsigned long inicio = millis();
+    while (millis() - inicio < TIMEOUT_COMANDO_AF_MS) {
+        uint8_t ack = le_reg_af(REG_AF_ACK);
+        if (ack == 0x00) return true;
+        if (ack == 0xFF) return false;   // erro de comunicação com o sensor
+        delay(5);
+    }
+    return false;
+}
+
+// Pergunta ao firmware de foco quais zonas focaram (comando 0x07): cada um dos CMD_PARA0..4
+// vale 0 se a zona correspondente focou.
+bool foco_confirmado() {
+    if (!comando_af(CMD_AF_RESULTADO)) {
+        snprintf(foco_zonas, sizeof(foco_zonas), "sem-resposta");
+        return true;
+    }
+    uint8_t z[5];
+    bool alguma = false;
+    for (int i = 0; i < 5; i++) {
+        z[i] = le_reg_af(REG_AF_PARAM0 + i);
+        if (z[i] == 0) alguma = true;
+    }
+    snprintf(foco_zonas, sizeof(foco_zonas), "%u,%u,%u,%u,%u",
+             (unsigned)z[0], (unsigned)z[1], (unsigned)z[2], (unsigned)z[3], (unsigned)z[4]);
+    return alguma;
 }
 
 // ============================================================================
@@ -726,29 +600,17 @@ void inicializa_autofoco() {
 
     ov5640.start(sensor);
 
+    // focusInit() grava o firmware de foco no sensor e espera o status "ocioso" (0x70).
     if (ov5640.focusInit() != 0) {
         registra("[ERRO] Falha ao carregar o firmware de autofoco");
         autofoco_ativo = false;
         return;
     }
 
-    registra("[OK] Firmware de autofoco carregado");
     autofoco_ativo = true;
-
-    if (MODO_AF_CONTINUO) {
-        if (ov5640.autoFocusMode() == 0) {
-            registra("[OK] Modo de autofoco CONTINUO ativado");
-        }
-    } else {
-        unsigned long inicio = millis();
-        while (millis() - inicio < 2000) {
-            if (le_reg_af(REG_AF_STATUS) == AF_STATUS_PRONTO) {
-                registra("[OK] Firmware de AF pronto (modo foco unico)");
-                break;
-            }
-            delay(50);
-        }
-    }
+    zonas_af_desatualizadas = false;
+    registra("[OK] Firmware de autofoco carregado (status 0x%02X, foco unico)",
+             le_reg_af(REG_AF_STATUS));
 }
 
 // ============================================================================
@@ -758,44 +620,65 @@ void inicializa_autofoco() {
 bool executa_foco() {
     foco_ultimo_ms = 0;
     foco_ultimas_tentativas = 0;
+    foco_zonas[0] = '\0';
     if (!autofoco_ativo) return false;
 
     unsigned long inicio_foco = millis();
 
+    // O manual manda relançar as zonas depois de mudar a resolução: a janela de foco (o
+    // centro da imagem) é calculada para a imagem do momento
+    if (zonas_af_desatualizadas) {
+        if (!comando_af(CMD_AF_RELANCA_ZONAS)) {
+            registra("[AVISO] Firmware de foco nao confirmou o relancamento das zonas");
+        }
+        zonas_af_desatualizadas = false;
+    }
+
     for (int tentativa = 1; tentativa <= TENTATIVAS_FOCO; tentativa++) {
         foco_ultimas_tentativas = tentativa;
 
-        if (!MODO_AF_CONTINUO) {
-            escreve_reg_af(REG_AF_COMANDO, CMD_AF_UNICO);
-            delay(50);
-        }
-
+        escreve_reg_af(REG_AF_ACK, 0x01);
+        escreve_reg_af(REG_AF_COMANDO, CMD_AF_UNICO);
         unsigned long inicio = millis();
 
+        // Concluído = CMD_ACK zerado e status 0x10.
+        bool concluiu = false;
+        bool viu_focando = false;
         while (millis() - inicio < TIMEOUT_FOCO_MS) {
+            delay(25);
+            uint8_t ack = le_reg_af(REG_AF_ACK);
             uint8_t status = le_reg_af(REG_AF_STATUS);
 
-            if (status == AF_STATUS_FOCADO) {
-                foco_ultimo_ms = millis() - inicio_foco;
-                registra("[INFO] Foco travado em %lu ms (tentativa %d)",
-                              millis() - inicio, tentativa);
-                return true;
-            }
-
-            if (status == 0xFF) {
+            if (status == 0xFF || ack == 0xFF) {
                 foco_ultimo_ms = millis() - inicio_foco;
                 registra("[AVISO] Erro de comunicacao com o sensor");
                 return false;
             }
-
-            delay(25);
+            if (status < 0x10 || (status >= 0x80 && status <= 0x8F)) viu_focando = true;
+            if (status == AF_STATUS_FOCADO && (ack == 0x00 || viu_focando)) {
+                concluiu = true;
+                break;
+            }
         }
 
-        registra("[AVISO] Tentativa %d de foco esgotou o tempo", tentativa);
+        if (!concluiu) {
+            registra("[AVISO] Tentativa %d de foco esgotou o tempo", tentativa);
+            continue;
+        }
+
+        // Concluído não quer dizer nítido: o sensor diz quais zonas focaram
+        bool focou = foco_confirmado();
+        registra("[INFO] Foco concluido em %lu ms (tentativa %d), zonas %s: %s",
+                 millis() - inicio, tentativa, foco_zonas,
+                 focou ? "focou" : "NENHUMA focou");
+        if (focou) {
+            foco_ultimo_ms = millis() - inicio_foco;
+            return true;
+        }
     }
 
     foco_ultimo_ms = millis() - inicio_foco;
-    registra("[AVISO] Foco nao travou. Causa provavel: pouca luz.");
+    registra("[AVISO] Foco nao confirmado: pouco contraste no centro da imagem, pouca luz ou objeto perto demais");
     return false;
 }
 
@@ -829,28 +712,32 @@ void handler_ping() {
 // HANDLER: /capture
 // ============================================================================
 
-// Cabeçalhos de medição de uma captura. Vão também na resposta de erro: o app
-// registra o que a placa fez mesmo quando a foto falha.
+// Cabeçalhos de medição de uma captura.
 void envia_diagnostico(bool foco_pedido, bool foco_ok, unsigned long ajuste_ms,
                        unsigned long descarte_ms, unsigned long captura_ms,
-                       unsigned long total_ms, uint32_t ovf_antes,
-                       uint32_t avisos_antes, const camera_fb_t* fb) {
-    servidor.sendHeader("X-Eyecam-Foco", foco_ok ? "travado" : "nao-travado");
+                       int tentativas_quadro, const char* recuperacao, unsigned long total_ms,
+                       uint32_t ovf_antes, uint32_t avisos_antes, const camera_fb_t* fb) {
+    servidor.sendHeader("X-Eyecam-Foco", foco_ok ? "travado" : (foco_pedido ? "nao-confirmado" : "nao-pedido"));
     servidor.sendHeader("X-Eyecam-Foco-Ms", String(foco_pedido ? foco_ultimo_ms : 0));
     servidor.sendHeader("X-Eyecam-Foco-Tentativas", String(foco_pedido ? foco_ultimas_tentativas : 0));
+    if (foco_pedido && foco_zonas[0] != '\0') servidor.sendHeader("X-Eyecam-Foco-Zonas", foco_zonas);
     servidor.sendHeader("X-Eyecam-Ajuste-Ms", String(ajuste_ms));
     servidor.sendHeader("X-Eyecam-Descarte-Ms", String(descarte_ms));
     servidor.sendHeader("X-Eyecam-Captura-Ms", String(captura_ms));
+    servidor.sendHeader("X-Eyecam-Quadro-Tentativas", String(tentativas_quadro));
+    servidor.sendHeader("X-Eyecam-Recuperacao", recuperacao);
     servidor.sendHeader("X-Eyecam-Tempo-Ms", String(total_ms));
     if (fb != NULL) {
         servidor.sendHeader("X-Eyecam-Resolucao", String(fb->width) + "x" + String(fb->height));
     }
     servidor.sendHeader("X-Eyecam-Xclk-Mhz", String(xclk_atual_mhz));
     servidor.sendHeader("X-Eyecam-Qualidade", String(qualidade_em_uso(resolucao_atual >= LIMITE_ALTA_RES)));
+    servidor.sendHeader("X-Eyecam-Noturno", modo_noturno ? "1" : "0");
     servidor.sendHeader("X-Eyecam-Ovf", String((unsigned long)(ovf_total - ovf_antes)));
     servidor.sendHeader("X-Eyecam-Avisos-Cam", String((unsigned long)(avisos_cam_total - avisos_antes)));
     servidor.sendHeader("X-Eyecam-Captura-N", String((unsigned long)capturas_desde_boot));
     servidor.sendHeader("X-Eyecam-Uptime-S", String(millis() / 1000));
+    servidor.sendHeader("X-Eyecam-Temp-C", String(temperatureRead(), 1));
     servidor.sendHeader("X-Eyecam-Log-Seq", String((unsigned long)log_ultima));
     servidor.sendHeader("Access-Control-Allow-Origin", "*");
 }
@@ -861,6 +748,7 @@ void handler_capture() {
     uint32_t ovf_antes = ovf_total;
     uint32_t avisos_antes = avisos_cam_total;
     unsigned long ajuste_ms = 0;
+    ajuste_sem_quadro = false;
 
     // --- Resolução ---
     if (servidor.hasArg("res")) {
@@ -893,19 +781,14 @@ void handler_capture() {
         foco_ok = executa_foco();
     }
 
-    // --- Descarta frames antigos ---
+    // --- Descarta o quadro antigo ---
     // GRAB_WHEN_EMPTY (1 buffer): o buffer guarda um quadro capturado logo
     // depois da foto ANTERIOR, ou seja, antes deste pedido e antes do foco.
     // Descartá-lo faz a câmera capturar um quadro novo. Um descarte basta.
-    //
-    // GRAB_LATEST (2 buffers): o driver já entrega o quadro mais recente; os
-    // descartes garantem um quadro posterior ao foco. Em alta resolução,
-    // descartar é caro (cada quadro leva centenas de milissegundos).
-    bool alta = (resolucao_atual >= LIMITE_ALTA_RES);
-    int descartes = !USAR_GRAB_LATEST ? 1 : (alta ? 1 : 2);
-
+    // Se a troca de resolução não recebeu quadro nenhum, pula: seriam mais
+    // 4 s esperando antes da recuperação.
     unsigned long inicio_descarte = millis();
-    for (int i = 0; i < descartes; i++) {
+    if (!ajuste_sem_quadro) {
         camera_fb_t* fb_descarte = esp_camera_fb_get();
         if (fb_descarte) esp_camera_fb_return(fb_descarte);
     }
@@ -913,35 +796,73 @@ void handler_capture() {
 
     // --- Captura ---
     // O tempo de esp_camera_fb_get é o de um quadro: se um quadro se perder
-    // (FB-OVF), ele dobra. É um sinal indireto, que não depende da contagem
-    // experimental dos avisos do driver.
+    // (FB-OVF), ele dobra. Sem quadro em 4 s e sem FB-OVF, a câmera parou de
+    // entregar quadros nesta resolução: recuperação em dois passos (v5.6.4)
     unsigned long inicio_captura = millis();
+    int tentativas_quadro = 1;
+    const char* recuperacao = "nenhuma";
     camera_fb_t* fb = esp_camera_fb_get();
+    bool alta = (resolucao_atual >= LIMITE_ALTA_RES);
+
+    // 1) JPEG grande demais?
+    if (!fb && ovf_total == ovf_antes && alta && qualidade_manual == 0 &&
+        QUALIDADE_ALTA_RES + compressao_extra + PASSO_COMPRESSAO <= QUALIDADE_MAXIMA_RECUPERACAO) {
+        compressao_extra += PASSO_COMPRESSAO;
+        sensor_t* s = esp_camera_sensor_get();
+        if (s) s->set_quality(s, qualidade_em_uso(true));
+        registra("[AVISO] Sem quadro; JPEG mais comprimido: qualidade %d", qualidade_em_uso(true));
+        registra_diagnostico_sensor();
+        tentativas_quadro++;
+        fb = esp_camera_fb_get();
+        if (fb) {
+            recuperacao = "compressao";
+            recuperacoes_compressao++;
+        }
+    }
+
+    // 2) Reinicia a câmera, foca de novo e tenta outra vez
+    if (!fb && ovf_total == ovf_antes) {
+        registra_diagnostico_sensor();
+        framesize_t alvo = resolucao_atual;
+        if (reinicia_camera(alvo)) {
+            camera_fb_t* fb_descarte = esp_camera_fb_get();
+            if (fb_descarte) esp_camera_fb_return(fb_descarte);
+            tentativas_quadro++;
+            fb = esp_camera_fb_get();
+            if (fb) {
+                recuperacao = "reinicio";
+                recuperacoes_reinicio++;
+            }
+        }
+    }
+    if (!fb) recuperacao = "falhou";
     unsigned long captura_ms = millis() - inicio_captura;
     unsigned long tempo_total = millis() - inicio_total;
 
     if (!fb) {
-        registra("[ERRO] Falha ao capturar frame (captura %lu, %lu ms, FB-OVF %lu)",
+        registra("[ERRO] Falha ao capturar quadro (captura %lu, %lu ms, FB-OVF %lu, %.1f C)",
                  (unsigned long)capturas_desde_boot, tempo_total,
-                 (unsigned long)(ovf_total - ovf_antes));
+                 (unsigned long)(ovf_total - ovf_antes), temperatureRead());
         envia_diagnostico(foco_pedido, foco_ok, ajuste_ms, descarte_ms, captura_ms,
-                          tempo_total, ovf_antes, avisos_antes, NULL);
+                          tentativas_quadro, recuperacao, tempo_total, ovf_antes, avisos_antes, NULL);
         servidor.send(500, "text/plain",
-            "Falha na captura. Se o log mostrar FB-OVF, reduza a resolucao "
-            "ou o valor de XCLK_ALTA_RES_MHZ no firmware.");
+            "Falha na captura. Com FB-OVF: reduza a resolucao ou o XCLK (/tune). "
+            "Sem FB-OVF: a camera nao entregou quadros nem depois de reiniciada.");
         return;
     }
 
     envia_diagnostico(foco_pedido, foco_ok, ajuste_ms, descarte_ms, captura_ms,
-                      tempo_total, ovf_antes, avisos_antes, fb);
-    // O Content-Type vai no próprio send_P; enviá-lo também por sendHeader
-    // duplicava o cabeçalho na resposta
+                      tentativas_quadro, recuperacao, tempo_total, ovf_antes, avisos_antes, fb);
+    // O Content-Type vai no próprio send_P; enviá-lo também por sendHeader duplicava o
+    // cabeçalho na resposta
     servidor.send_P(200, "image/jpeg", (const char*)fb->buf, fb->len);
 
-    registra("[INFO] Foto %lu: %ux%u, %u bytes | foco: %s | %lu ms | XCLK %d MHz | FB-OVF %lu",
+    bool recuperada = strcmp(recuperacao, "nenhuma") != 0;
+    registra("[INFO] Foto %lu: %ux%u, %u bytes | foco: %s | %lu ms | q%d | OVF %lu | %.1f C%s%s",
              (unsigned long)capturas_desde_boot, fb->width, fb->height, fb->len,
-             foco_ok ? "travado" : (foco_pedido ? "nao-travado" : "nao-pedido"),
-             tempo_total, xclk_atual_mhz, (unsigned long)(ovf_total - ovf_antes));
+             foco_ok ? "travado" : (foco_pedido ? "nao-confirmado" : "nao-pedido"),
+             tempo_total, qualidade_em_uso(alta), (unsigned long)(ovf_total - ovf_antes),
+             temperatureRead(), recuperada ? " | recuperada: " : "", recuperada ? recuperacao : "");
 
     esp_camera_fb_return(fb);
 }
@@ -949,10 +870,6 @@ void handler_capture() {
 // ============================================================================
 // HANDLER: /log
 // ============================================================================
-// Texto, uma linha por mensagem: número, milissegundos desde o boot e texto,
-// separados por TAB. ?desde=N devolve só as linhas depois da N. O cabeçalho
-// X-Eyecam-Log-Seq traz o número da última linha. Se ele for MENOR que o N
-// pedido, a placa reiniciou e a numeração recomeçou.
 
 void handler_log() {
     uint32_t desde = 0;
@@ -993,18 +910,16 @@ void handler_focus() {
         return;
     }
 
-    unsigned long inicio = millis();
     bool ok = executa_foco();
-    unsigned long tempo = millis() - inicio;
-    uint8_t status = le_reg_af(REG_AF_STATUS);
 
     String msg = "=== DIAGNOSTICO DO AUTOFOCO ===\n\n";
     msg += "Resultado: ";
-    msg += ok ? "FOCO TRAVADO" : "NAO TRAVOU";
-    msg += "\nTempo: " + String(tempo) + " ms";
-    msg += "\nStatus (0x3029): 0x" + String(status, HEX);
-    msg += "\n\nO autofoco precisa de CONTRASTE. Aponte para um texto\n";
-    msg += "com boa iluminacao, a uns 20-30 cm de distancia.\n";
+    msg += ok ? "FOCO CONFIRMADO" : "FOCO NAO CONFIRMADO";
+    msg += "\nTempo: " + String(foco_ultimo_ms) + " ms em " + String(foco_ultimas_tentativas) + " tentativa(s)";
+    msg += "\nZonas (0 = focou): " + String(foco_zonas[0] ? foco_zonas : "-");
+    msg += "\nStatus (0x3029): 0x" + String(le_reg_af(REG_AF_STATUS), HEX);
+    msg += "\n\nO autofoco mede o CONTRASTE no centro da imagem. Aponte o\n";
+    msg += "centro para o texto, com boa iluminacao, a uns 20-35 cm.\n";
 
     servidor.sendHeader("Access-Control-Allow-Origin", "*");
     servidor.send(200, "text/plain", msg);
@@ -1019,22 +934,24 @@ void handler_info() {
 
     String json = "{";
     json += "\"dispositivo\":\"Eye-cam\",";
-    json += "\"versao_firmware\":\"5.6.2\",";
+    json += "\"versao_firmware\":\"5.6.4\",";
     json += "\"motivo_reset\":\"" + String(motivo_reset()) + "\",";
     json += "\"capturas_desde_boot\":" + String((unsigned long)capturas_desde_boot) + ",";
     json += "\"fb_ovf_total\":" + String((unsigned long)ovf_total) + ",";
     json += "\"avisos_camera_total\":" + String((unsigned long)avisos_cam_total) + ",";
     json += "\"log_seq\":" + String((unsigned long)log_ultima) + ",";
+    json += "\"temperatura_c\":" + String(temperatureRead(), 1) + ",";
+    json += "\"compressao_extra\":" + String(compressao_extra) + ",";
+    json += "\"recuperacoes_compressao\":" + String((unsigned long)recuperacoes_compressao) + ",";
+    json += "\"recuperacoes_reinicio\":" + String((unsigned long)recuperacoes_reinicio) + ",";
     json += "\"placa\":\"ESP32-S3-CAM N16R8\",";
     json += "\"sensor\":\"" + sensor_detectado + "\",";
     json += "\"autofoco_disponivel\":" + String(autofoco_ativo ? "true" : "false") + ",";
-    json += "\"autofoco_modo\":\"" + String(MODO_AF_CONTINUO ? "continuo" : "unico") + "\",";
     json += "\"autofoco_status\":" + String(af_status) + ",";
     json += "\"xclk_mhz\":" + String(xclk_atual_mhz) + ",";
     json += "\"resolucao_atual\":" + String((int)resolucao_atual) + ",";
     json += "\"resolucao_maxima\":\"" + String(resolucao_maxima == FRAMESIZE_QSXGA ? "qsxga" : "uxga") + "\",";
     json += "\"buffer_jpeg_kb\":" + String((unsigned long)(tamanho_buffer_jpeg / 1024)) + ",";
-    json += "\"modo_captura\":\"" + String(USAR_GRAB_LATEST ? "grab_latest" : "grab_when_empty") + "\",";
     json += json_ajustes() + ",";
     json += "\"modo_wifi\":\"AP\",";
     json += "\"ap_ssid\":\"" + String(AP_SSID) + "\",";
@@ -1052,14 +969,8 @@ void handler_info() {
 }
 
 // ============================================================================
-// HANDLER: /tune  (ajustes de imagem para a bancada de testes)
+// HANDLER: /tune  (ajustes de imagem e do clock para a bancada de testes)
 // ============================================================================
-// Exemplo: /tune?sharpness=2&denoise=0 aplica os dois e devolve os valores
-// em uso. Sem parâmetros, só informa. Valores fora da faixa são recusados
-// (400) sem aplicar nada. Os ajustes valem até a placa reiniciar; nada é
-// gravado. reset=1 reinicia a placa, o único jeito confiável de voltar aos
-// registros de fábrica do sensor (o reset do próprio sensor apagaria o
-// firmware de autofoco carregado nele).
 
 void handler_tune() {
     sensor_t* sensor = esp_camera_sensor_get();
@@ -1077,7 +988,9 @@ void handler_tune() {
     // --- Validação de tudo antes de aplicar qualquer coisa ---
     struct Ajuste { const char* nome; int minimo; int maximo; };
     const Ajuste faixas[] = {
-        {"sharpness", -3, 3}, {"denoise", 0, 8}, {"contrast", -2, 2}, {"quality", 0, 63}
+        {"sharpness", -3, 3}, {"denoise", 0, 8}, {"contrast", -2, 2}, {"quality", 0, 63},
+        {"xclk", XCLK_MINIMO_MHZ, XCLK_MAXIMO_MHZ}, {"xclk_alta", XCLK_MINIMO_MHZ, XCLK_MAXIMO_MHZ},
+        {"noite", 0, 1}
     };
     for (const Ajuste& f : faixas) {
         if (!servidor.hasArg(f.nome)) continue;
@@ -1089,7 +1002,7 @@ void handler_tune() {
             servidor.send(400, "text/plain",
                 "Valor invalido para " + String(f.nome) +
                 ". Faixas: sharpness -3..3, denoise 0..8, contrast -2..2, "
-                "quality 4..63 (0 = automatica)");
+                "quality 4..63 (0 = automatica), xclk e xclk_alta 6..24 (MHz), noite 0..1");
             return;
         }
     }
@@ -1113,24 +1026,41 @@ void handler_tune() {
         bool alta = (resolucao_atual >= LIMITE_ALTA_RES);
         if (sensor->set_quality(sensor, qualidade_em_uso(alta)) != 0) falhas++;
     }
+    if (servidor.hasArg("noite")) {
+        modo_noturno = servidor.arg("noite") == "1";
+        aplica_modo_noturno();
+    }
+    if (servidor.hasArg("xclk") || servidor.hasArg("xclk_alta")) {
+        if (servidor.hasArg("xclk")) xclk_baixa_mhz = servidor.arg("xclk").toInt();
+        if (servidor.hasArg("xclk_alta")) xclk_alta_mhz = servidor.arg("xclk_alta").toInt();
+        // Se o clock da resolução atual mudou, aplica já e refaz a resolução (o PLL do
+        // sensor depende do XCLK)
+        bool alta = (resolucao_atual >= LIMITE_ALTA_RES);
+        int desejado = alta ? xclk_alta_mhz : xclk_baixa_mhz;
+        if (desejado != xclk_atual_mhz) {
+            troca_xclk(sensor, desejado);
+            sensor->set_framesize(sensor, resolucao_atual);
+            aplica_modo_noturno();
+            zonas_af_desatualizadas = true;
+        }
+    }
 
-    registra("[INFO] /tune: nitidez=%d denoise=%d contraste=%d qualidade=%d (falhas: %d)",
+    registra("[INFO] /tune: nitidez=%d denoise=%d contraste=%d qualidade=%d xclk=%d/%d noturno=%d (falhas: %d)",
                   nitidez_atual, denoise_atual, contraste_atual,
-                  qualidade_em_uso(resolucao_atual >= LIMITE_ALTA_RES), falhas);
+                  qualidade_em_uso(resolucao_atual >= LIMITE_ALTA_RES),
+                  xclk_baixa_mhz, xclk_alta_mhz, modo_noturno ? 1 : 0, falhas);
 
     String json = "{" + json_ajustes() + ",\"falhas\":" + String(falhas) + "}";
     servidor.sendHeader("Access-Control-Allow-Origin", "*");
     servidor.send(falhas == 0 ? 200 : 500, "application/json", json);
 }
 
-// Qualidade JPEG efetiva: a manual (definida por /tune), se houver; senão a
-// automática por resolução
 int qualidade_em_uso(bool alta) {
     if (qualidade_manual > 0) return qualidade_manual;
-    return alta ? QUALIDADE_ALTA_RES : QUALIDADE_PADRAO;
+    return alta ? QUALIDADE_ALTA_RES + compressao_extra : QUALIDADE_PADRAO;
 }
 
-// Trecho JSON com os ajustes de imagem em uso (null = valor de fábrica)
+// Trecho JSON com os ajustes em uso (null = valor de fábrica)
 String json_ajustes() {
     auto valor = [](int v) { return v == AJUSTE_FABRICA ? String("null") : String(v); };
     bool alta = (resolucao_atual >= LIMITE_ALTA_RES);
@@ -1139,6 +1069,9 @@ String json_ajustes() {
     j += ",\"contraste\":" + valor(contraste_atual);
     j += ",\"qualidade_jpeg\":" + String(qualidade_em_uso(alta));
     j += ",\"qualidade_modo\":\"" + String(qualidade_manual > 0 ? "manual" : "automatica") + "\"";
+    j += ",\"xclk_ate_xga_mhz\":" + String(xclk_baixa_mhz);
+    j += ",\"xclk_alta_mhz\":" + String(xclk_alta_mhz);
+    j += ",\"modo_noturno\":" + String(modo_noturno ? "true" : "false");
     return j;
 }
 
@@ -1153,13 +1086,14 @@ void handler_404() {
     msg += "  GET /capture  - foca e tira foto JPEG\n";
     msg += "  GET /focus    - diagnostico do autofoco\n";
     msg += "  GET /info     - info do dispositivo (JSON)\n";
-    msg += "  GET /tune     - ajustes de imagem (JSON)\n";
+    msg += "  GET /tune     - ajustes de imagem e do clock (JSON)\n";
     msg += "  GET /log      - ultimas mensagens do firmware (?desde=N)\n";
     msg += "\nParametros de /capture:\n";
     msg += "  ?res=qvga|vga|svga|xga|sxga|uxga|qxga|qsxga (5mp = qsxga)\n";
     msg += "  ?af=0  (captura sem focar)\n";
     msg += "\nParametros de /tune:\n";
     msg += "  ?sharpness=-3..3 &denoise=0..8 &contrast=-2..2 &quality=4..63 (0 = auto)\n";
+    msg += "  ?xclk=6..24 &xclk_alta=6..24 (MHz) &noite=0|1\n";
     msg += "  ?reset=1  (reinicia a placa)\n";
 
     servidor.send(404, "text/plain", msg);

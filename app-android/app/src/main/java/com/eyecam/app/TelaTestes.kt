@@ -2,6 +2,7 @@ package com.eyecam.app
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -17,17 +18,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-/**
- * Modo bancada: roda os planos de teste (PlanoTestes) com um botão por passo.
- *
- * Resolução, autofoco, leitura, repetições e nome dos arquivos são fixados
- * pelo plano; a pessoa na bancada só monta a condição pedida e aperta. Cada
- * passo grava foto, registro e planilha em Download/EyeCam/<sessão>. O
- * progresso fica guardado: fechar o app no meio não perde o ponto.
- *
- * Para evitar rótulo errado, quando a montagem física muda (distância, luz)
- * o botão de captura só aparece depois do "Já ajustei a montagem".
- */
+/** Modo bancada: roda os planos de teste (PlanoTestes) com um botão por passo. */
 @Composable
 fun TelaTestes(onVoltar: () -> Unit) {
     val context = LocalContext.current
@@ -164,7 +155,11 @@ fun TelaTestes(onVoltar: () -> Unit) {
             style = MaterialTheme.typography.bodySmall
         )
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Quatro planos não cabem lado a lado em todo celular: a fileira rola
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState())
+        ) {
             PlanosTestes.TODOS.forEach { p ->
                 FilterChip(
                     selected = p.id == plano.id,

@@ -19,11 +19,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        // Ao fechar o app, desfaz o pedido da rede do óculos: o celular volta
-        // ao Wi-Fi normal. Só no fechamento de verdade (isFinishing): com a
-        // tela apagada ou o app em segundo plano, a conexão continua, para a
-        // próxima leitura não esperar uma nova conexão. Se o Android encerrar
-        // o processo, ele desfaz o pedido sozinho.
+        // Ao fechar o app, desfaz o pedido da rede do óculos: o celular volta ao Wi-Fi
+        // normal.
         if (isFinishing) EyeCamClient.desconectar(this)
         super.onDestroy()
     }
@@ -34,12 +31,12 @@ enum class Tela { ACESSIVEL, DESENVOLVEDOR, BANCADA }
 
 @Composable
 fun AppEyeCam() {
-    // Controla qual tela está visível. rememberSaveable mantém a tela quando
-    // o Android recria a Activity (mudança de tema, de tamanho de fonte etc.).
+    // Controla qual tela está visível. rememberSaveable mantém a tela quando o Android
+    // recria a Activity (mudança de tema, de tamanho de fonte etc.).
     var tela by rememberSaveable { mutableStateOf(Tela.ACESSIVEL) }
 
-    // O Voltar do sistema volta uma tela (bancada → desenvolvedor →
-    // acessível) em vez de fechar o app no meio de um teste
+    // O Voltar do sistema volta uma tela (bancada → desenvolvedor → acessível) em vez de
+    // fechar o app no meio de um teste
     BackHandler(enabled = tela != Tela.ACESSIVEL) {
         tela = if (tela == Tela.BANCADA) Tela.DESENVOLVEDOR else Tela.ACESSIVEL
     }

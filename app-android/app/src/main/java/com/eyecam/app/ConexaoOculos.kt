@@ -18,9 +18,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
-/**
- * Como o celular chegou (ou vai chegar) à rede Wi-Fi do óculos.
- */
+/** Como o celular chegou (ou vai chegar) à rede Wi-Fi do óculos. */
 enum class FormaConexao {
     /** O celular já está na rede do óculos: conexão manual ou pedido anterior ainda ativo */
     REDE_JA_CONECTADA,
@@ -38,10 +36,7 @@ enum class FormaConexao {
 /** Rede localizada e a forma como se chegou a ela. */
 data class RedeOculos(val rede: Network, val forma: FormaConexao)
 
-/**
- * Regras da conexão, sem dependência do Android (testadas em
- * RegrasConexaoTest).
- */
+/** Regras da conexão, sem dependência do Android (testadas em RegrasConexaoTest). */
 object RegrasConexao {
 
     /** Nome da rede criada pelo óculos. Igual a AP_SSID no firmware. */
@@ -50,22 +45,18 @@ object RegrasConexao {
     /** O WifiNetworkSpecifier existe a partir do Android 10 (API 29). */
     const val SDK_MINIMO_PEDIDO = 29
 
-    // Com o óculos já aprovado, o Android só procura a rede e conecta, o que
-    // leva alguns segundos. Se não achar nesse prazo, o óculos está desligado
-    // ou longe: melhor avisar logo do que deixar o usuário esperando.
+    // Com o óculos já aprovado, o Android só procura a rede e conecta, o que leva alguns
+    // segundos.
     const val TEMPO_PEDIDO_COM_BSSID_MS = 12_000
 
-    // Na primeira vez o usuário precisa ouvir e confirmar a caixa do sistema
-    // (com o TalkBack, isso leva mais tempo).
+    // Na primeira vez o usuário precisa ouvir e confirmar a caixa do sistema (com o
+    // TalkBack, isso leva mais tempo).
     const val TEMPO_PEDIDO_SEM_BSSID_MS = 60_000
 
     private val FORMATO_MAC = Regex("^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
     private val CAMPO_BSSID = Regex("\"ap_bssid\"\\s*:\\s*\"([^\"]*)\"")
 
-    /**
-     * Decide como conectar. A ordem importa: se o celular já está na rede do
-     * óculos (por exemplo, conectado à mão), não há o que pedir.
-     */
+    /** Decide como conectar. */
     fun escolherForma(
         sdk: Int,
         temSenha: Boolean,
@@ -83,11 +74,10 @@ object RegrasConexao {
         if (forma == FormaConexao.PEDIDO_SEM_BSSID) TEMPO_PEDIDO_SEM_BSSID_MS
         else TEMPO_PEDIDO_COM_BSSID_MS
 
-    /**
-     * Padroniza um endereço MAC ("AA:BB:CC:DD:EE:FF" → minúsculas). Devolve
-     * null se o texto não for um MAC utilizável: o Android recusa o endereço
-     * zerado e o de broadcast num pedido de rede.
-     */
+    /** Se a conexão que acabou de dar certo autoriza guardar o BSSID do óculos. */
+    fun deveAprenderBssid(forma: FormaConexao): Boolean = forma == FormaConexao.PEDIDO_SEM_BSSID
+
+    /** Padroniza um endereço MAC ("AA:BB:CC:DD:EE:FF" → minúsculas). */
     fun normalizarBssid(texto: String?): String? {
         val mac = texto?.trim()?.lowercase() ?: return null
         if (!FORMATO_MAC.matches(mac)) return null
@@ -95,12 +85,6 @@ object RegrasConexao {
         return mac
     }
 
-    /**
-     * Extrai o campo ap_bssid do JSON de /info (firmware v5.5 em diante).
-     * Uma expressão regular basta para um campo só e mantém esta regra
-     * testável sem o Android (o org.json do Android não roda nos testes
-     * unitários).
-     */
     fun extrairBssid(jsonInfo: String?): String? =
         jsonInfo?.let { CAMPO_BSSID.find(it)?.groupValues?.get(1) }?.let(::normalizarBssid)
 
@@ -129,52 +113,25 @@ object RegrasConexao {
     }
 }
 
-/**
- * Leva o celular até a rede Wi-Fi do óculos.
- *
- * O óculos cria a própria rede (Access Point, decisão 4.1 do projeto), e o
- * celular precisa entrar nela. Até a v5.4 isso era feito à mão, nas
- * configurações de Wi-Fi: difícil para quem não enxerga e frágil em casa,
- * onde o Android prefere o Wi-Fi com internet.
- *
- * Agora, no Android 10 ou superior, o app PEDE a rede ao sistema com um
- * WifiNetworkSpecifier (nome da rede + senha):
- *
- *   1. Na primeira vez o Android mostra uma caixa de confirmação. Depois da
- *      conexão, o app lê o BSSID (endereço MAC) do óculos em /info e o guarda.
- *   2. Nas vezes seguintes o pedido leva o nome E o BSSID exatos. Para um
- *      pedido específico de um ponto de acesso já aprovado, o Android não
- *      pergunta de novo (documentação "Wi-Fi Network Request API").
- *   3. Enquanto o pedido está ativo, o celular fica na rede do óculos. Ao
- *      liberar o pedido (fechar o app), ele volta ao Wi-Fi normal sozinho.
- *   4. No Android 12 ou superior, em aparelhos que suportam duas conexões
- *      Wi-Fi simultâneas, o óculos entra como conexão secundária e o Wi-Fi
- *      com internet continua ligado.
- *
- * A rede pedida não tem internet, e o pedido diz isso
- * (removeCapability(INTERNET)): o Android não a trata como substituta do
- * Wi-Fi de casa nem avisa "rede sem internet".
- *
- * No Android 8 e 9, ou se o app foi compilado sem a senha, vale o caminho
- * antigo: o usuário conecta à mão e o app só localiza a rede.
- */
+/** Leva o celular até a rede Wi-Fi do óculos. */
 object ConexaoOculos {
 
     // Faixa de endereços que o Access Point do ESP32 distribui
     private const val PREFIXO_REDE_OCULOS = "192.168.4."
 
     private const val ARQUIVO_PREFERENCIAS = "eyecam_conexao"
-    private const val CHAVE_BSSID = "bssid_oculos"
+    // BSSID de um óculos aprovado na caixa do Android.
+    private const val CHAVE_BSSID = "bssid_aprovado"
+    private const val CHAVE_BSSID_ANTIGA = "bssid_oculos"
 
-    // Margem sobre o prazo do próprio Android: se o aviso de "não encontrado"
-    // nunca chegar, o app não fica preso esperando
+    // Margem sobre o prazo do próprio Android: se o aviso de "não encontrado" nunca chegar,
+    // o app não fica preso esperando
     private const val MARGEM_TEMPO_MS = 5_000L
 
     // Um pedido por vez: dois toques seguidos não podem abrir dois pedidos
     private val mutex = Mutex()
 
-    // Pedido em andamento. Enquanto o callback estiver registrado, o Android
-    // mantém o celular na rede do óculos; ao cancelá-lo, a rede é desfeita.
+    // Pedido em andamento.
     @Volatile private var callbackPedido: ConnectivityManager.NetworkCallback? = null
     @Volatile private var redePedida: Network? = null
 
@@ -183,10 +140,8 @@ object ConexaoOculos {
         private set
 
     /**
-     * Erro técnico da última tentativa de conexão que falhou por exceção (uma
-     * permissão faltando, por exemplo). Sem isso, a falha chegaria ao usuário
-     * só como "óculos não encontrado", sem pista da causa. Limpo a cada
-     * conexão bem-sucedida.
+     * Erro técnico da última tentativa de conexão que falhou por exceção (uma permissão
+     * faltando, por exemplo).
      */
     @Volatile var ultimoErro: String? = null
 
@@ -206,16 +161,18 @@ object ConexaoOculos {
     /** Guarda o BSSID informado em /info (ignora se o firmware não informar) */
     fun lembrarBssid(context: Context, jsonInfo: String?) {
         val bssid = RegrasConexao.extrairBssid(jsonInfo) ?: return
-        preferencias(context).edit { putString(CHAVE_BSSID, bssid) }
+        preferencias(context).edit {
+            putString(CHAVE_BSSID, bssid)
+            remove(CHAVE_BSSID_ANTIGA)
+        }
     }
 
-    /**
-     * Esquece o óculos: a próxima conexão volta a pedir confirmação. Serve
-     * para quando a placa é trocada (o BSSID muda e o pedido específico
-     * deixaria de encontrar a rede).
-     */
+    /** Esquece o óculos: a próxima conexão volta a pedir confirmação. */
     fun esquecerBssid(context: Context) {
-        preferencias(context).edit { remove(CHAVE_BSSID) }
+        preferencias(context).edit {
+            remove(CHAVE_BSSID)
+            remove(CHAVE_BSSID_ANTIGA)
+        }
     }
 
     /** Como a próxima conexão vai acontecer (para avisar o usuário antes) */
@@ -229,12 +186,7 @@ object ConexaoOculos {
         )
     }
 
-    /**
-     * Localiza a rede do óculos ou a pede ao Android.
-     *
-     * @return a rede e a forma usada, ou null se o óculos não foi encontrado
-     *         (desligado, longe, ou o usuário recusou a confirmação)
-     */
+    /** Localiza a rede do óculos ou a pede ao Android. */
     suspend fun obterRede(context: Context): RedeOculos? = mutex.withLock {
         val app = context.applicationContext
         val cm = gerenciador(app)
@@ -263,16 +215,10 @@ object ConexaoOculos {
         rede?.let { registrar(RedeOculos(it, forma)) }
     }
 
-    /**
-     * Desfaz o pedido de rede: o celular volta ao Wi-Fi normal. Chamado ao
-     * fechar o app. Se o Android encerrar o processo, ele desfaz sozinho.
-     */
+    /** Desfaz o pedido de rede: o celular volta ao Wi-Fi normal. */
     fun liberar(context: Context) = liberarPedido(gerenciador(context))
 
-    /**
-     * Resumo para o modo desenvolvedor. Nunca mostra a senha, só se ela
-     * existe.
-     */
+    /** Resumo para o modo desenvolvedor. */
     fun diagnostico(context: Context): String {
         val sdk = Build.VERSION.SDK_INT
         val automatica = when {
@@ -280,9 +226,8 @@ object ConexaoOculos {
             BuildConfig.OCULOS_SENHA.isEmpty() -> "não (app compilado sem o segredos.h)"
             else -> "sim"
         }
-        // O diagnóstico roda ao abrir a tela: uma consulta que falhe vira
-        // texto, nunca derruba o app (foi o que a falta de ACCESS_WIFI_STATE
-        // fez na primeira versão)
+        // O diagnóstico roda ao abrir a tela: uma consulta que falhe vira texto, nunca
+        // derruba o app (foi o que a falta de ACCESS_WIFI_STATE fez na primeira versão)
         val duasRedes = try {
             when (suportaDuasRedes(context)) {
                 true -> "sim"
@@ -337,8 +282,8 @@ object ConexaoOculos {
                     }
 
                     override fun onLost(network: Network) {
-                        // Óculos desligado ou fora de alcance: desfaz o pedido
-                        // para que a próxima leitura faça um novo
+                        // Óculos desligado ou fora de alcance: desfaz o pedido para que a
+                        // próxima leitura faça um novo
                         if (network == redePedida) liberarPedido(cm)
                     }
                 }
@@ -350,18 +295,16 @@ object ConexaoOculos {
     }
 
     private fun liberarPedido(cm: ConnectivityManager) {
-        // runCatching: depois de onUnavailable o Android já removeu o pedido,
-        // e cancelar de novo lança exceção
+        // runCatching: depois de onUnavailable o Android já removeu o pedido, e cancelar de
+        // novo lança exceção
         callbackPedido?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callbackPedido = null
         redePedida = null
     }
 
     /**
-     * Rede do óculos à qual o celular já está conectado: o pedido anterior,
-     * se ainda estiver de pé, ou uma Wi-Fi com endereço 192.168.4.x (conexão
-     * manual). Olhar o endereço evita confundir com o Wi-Fi de casa quando o
-     * celular está em duas redes ao mesmo tempo.
+     * Rede do óculos à qual o celular já está conectado: o pedido anterior, se ainda
+     * estiver de pé, ou uma Wi-Fi com endereço 192.168.4.x (conexão manual).
      */
     private fun redeDoOculosAtual(cm: ConnectivityManager): Network? {
         redePedida?.let { if (cm.getNetworkCapabilities(it) != null) return it }
@@ -374,9 +317,9 @@ object ConexaoOculos {
 
     private fun primeiraRedeWifi(cm: ConnectivityManager): Network? = redesWifi(cm).firstOrNull()
 
-    // allNetworks está obsoleto desde o Android 12; a alternativa
-    // (NetworkCallback) é assíncrona e não traz ganho aqui, onde só interessa
-    // o retrato das redes no instante do toque.
+    // allNetworks está obsoleto desde o Android 12; a alternativa (NetworkCallback) é
+    // assíncrona e não traz ganho aqui, onde só interessa o retrato das redes no instante
+    // do toque.
     @Suppress("DEPRECATION")
     private fun redesWifi(cm: ConnectivityManager): List<Network> =
         cm.allNetworks.filter { rede ->

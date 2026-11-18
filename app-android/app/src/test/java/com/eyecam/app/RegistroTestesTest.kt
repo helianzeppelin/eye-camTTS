@@ -5,10 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 
-/**
- * Testes da formatação dos registros do modo bancada (FormatoTestes,
- * TextoRegistro).
- */
+/** Testes da formatação dos registros do modo bancada (FormatoTestes, TextoRegistro). */
 class RegistroTestesTest {
 
     private val colunas = listOf("teste", "valor", "erro")
@@ -40,6 +37,32 @@ class RegistroTestesTest {
             "teste;valor\nB30-5MP-r2;2\nB30-5MP-r1-falha-101010;3\n",
             FormatoTestes.removerTeste(csv, "B30-5MP-r1")
         )
+    }
+
+    @Test
+    fun planilhaDeVersaoAnteriorGanhaAsColunasNovasSemPerderValores() {
+        val antiga = "teste;erro;velha\nF4;HTTP 500;x\n"
+        val csv = FormatoTestes.acrescentar(antiga, colunas, listOf(mapOf("teste" to "F5", "valor" to "2")))
+        // Colunas atuais primeiro; a que saiu ("velha") vai para o fim
+        assertEquals("teste;valor;erro;velha\nF4;;HTTP 500;x\nF5;2;;\n", csv)
+    }
+
+    @Test
+    fun resumoAvisaQuandoOCorpoVeioDaAltura() {
+        val pelaAltura = listOf(AcertoCorpo(10, 90.0, 300, 1.0, alturaLinhaPx = 14.0))
+        val peloTitulo = listOf(AcertoCorpo(10, 90.0, 300, 1.0))
+        assertTrue(FormatoTestes.resumoAcertos(pelaAltura)!!.endsWith("(corpo pela altura das linhas)"))
+        assertEquals("10 pt 90%", FormatoTestes.resumoAcertos(peloTitulo))
+        assertEquals("altura", FormatoTestes.origemDosCorpos(pelaAltura))
+        assertEquals("titulo", FormatoTestes.origemDosCorpos(peloTitulo))
+        assertEquals("", FormatoTestes.origemDosCorpos(emptyList()))
+    }
+
+    @Test
+    fun celulasDesfazemALinha() {
+        val valores = listOf("F4;x", "diz \"oi\"", "", "97,5")
+        val linha = valores.joinToString(";") { FormatoTestes.celula(it) }
+        assertEquals(valores, FormatoTestes.celulas(linha))
     }
 
     @Test

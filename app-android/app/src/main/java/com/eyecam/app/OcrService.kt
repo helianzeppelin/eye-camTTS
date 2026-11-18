@@ -1,47 +1,29 @@
 package com.eyecam.app
 
 import android.graphics.Bitmap
+import android.graphics.Point
 import android.graphics.Rect
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import kotlin.math.hypot
 
-/**
- * Resultado simples do reconhecimento de texto.
- *
- * @param textosBlocos texto de cada bloco, na ordem devolvida pelo ML Kit.
- *        Usado no modo desenvolvedor para medir o acerto bloco a bloco (a
- *        página de teste tem um parágrafo por tamanho de fonte).
- * @param erro mensagem técnica quando o OCR falha; nesse caso o texto vem
- *        vazio. Fica separada do texto para que a falha nunca seja lida em
- *        voz alta nem contada como texto reconhecido.
- * @param alturaMedianaLinhaPx altura mediana das caixas das linhas, em
- *        pixels: uma medida do tamanho do texto na imagem, usada pela
- *        ampliação adaptativa. null quando não há linhas.
- */
+/** Resultado simples do reconhecimento de texto. */
 data class ResultadoOcr(
     val texto: String,
     val qtdBlocos: Int,
     val qtdLinhas: Int,
     val textosBlocos: List<String> = emptyList(),
     val erro: String? = null,
-    val alturaMedianaLinhaPx: Double? = null
+    val alturaMedianaLinhaPx: Double? = null,
+    val linhas: List<LinhaOcr> = emptyList()
 )
 
 /**
- * Resultado do OCR adaptativo.
- *
- * @param fatorAmpliacao ampliação aplicada antes da passada que gerou o
- *        resultado (1.0 = imagem original)
- * @param alturaLinhaOriginalPx tamanho do texto medido na imagem original
- * @param semAmpliacao a primeira passada, na imagem original: o modo bancada
- *        registra as duas leituras e mede o ganho da ampliação
- * @param fatorTentado ampliação da segunda passada, mesmo quando ela foi
- *        descartada (1.0 = não houve segunda passada)
- * @param tempoSemAmpliacaoMs duração da primeira passada
- * @param tempoTotalMs duração das duas passadas, com a ampliação
+ * Resultado do OCR adaptativo. resultado (1.0 = imagem original) registra as duas leituras
+ * e mede o ganho da ampliação descartada (1.0 = não houve segunda passada)
  */
 data class ResultadoOcrAdaptativo(
     val resultado: ResultadoOcr,
@@ -54,12 +36,8 @@ data class ResultadoOcrAdaptativo(
 )
 
 /**
- * Resultado do OCR incluindo as caixas dos blocos de texto em coordenadas
- * normalizadas (0.0 a 1.0).
- *
- * As caixas servem a dois propósitos:
- *   - detectar movimento da câmera entre quadros (ver Estabilidade)
- *   - recortar a região do texto antes da leitura definitiva
+ * Resultado do OCR incluindo as caixas dos blocos de texto em coordenadas normalizadas (0.0
+ * a 1.0).
  */
 data class ResultadoOcrDetalhado(
     val texto: String,
@@ -71,48 +49,42 @@ data class ResultadoOcrDetalhado(
     val erro: String? = null
 )
 
-/**
- * Reconhecimento de texto com o Google ML Kit.
- *
- * O modelo roda inteiramente no aparelho, sem necessidade de internet — o que
- * é essencial aqui, já que o celular fica conectado ao Access Point do ESP32,
- * que não tem saída para a internet.
- */
+/** Reconhecimento de texto com o Google ML Kit. */
 object OcrService {
 
     // Reconhecedor para alfabeto latino (cobre português)
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
-    /**
-     * Reconhece o texto de uma imagem.
-     */
+    /** Reconhece o texto de uma imagem. */
     suspend fun reconhecerTexto(bitmap: Bitmap): ResultadoOcr =
         suspendCancellableCoroutine { continuation ->
 
-            // rotationDegrees = 0: a imagem já vem na orientação correta,
-            // corrigida no firmware pelo vflip
+            // rotationDegrees = 0: a imagem já vem na orientação correta, corrigida no
+            // firmware pelo vflip
             val imagem = InputImage.fromBitmap(bitmap, 0)
 
             recognizer.process(imagem)
                 .addOnSuccessListener { visionText ->
                     val blocos = visionText.textBlocks
-                    var totalLinhas = 0
-                    val alturas = mutableListOf<Int>()
-                    for (bloco in blocos) {
-                        totalLinhas += bloco.lines.size
-                        for (linha in bloco.lines) {
-                            linha.boundingBox?.let { alturas += it.height() }
+                    val linhas = blocos.flatMap { bloco ->
+                        bloco.lines.map { linha ->
+                            LinhaOcr(
+                                texto = linha.text,
+                                alturaPx = alturaDaLinha(linha.cornerPoints, linha.boundingBox),
+                                centroY = linha.boundingBox?.exactCenterY()?.toDouble() ?: 0.0
+                            )
                         }
                     }
+                    val alturas = linhas.mapNotNull { it.alturaPx }.sorted()
 
                     continuation.resume(
                         ResultadoOcr(
                             texto = visionText.text,
                             qtdBlocos = blocos.size,
-                            qtdLinhas = totalLinhas,
+                            qtdLinhas = linhas.size,
                             textosBlocos = blocos.map { it.text },
-                            alturaMedianaLinhaPx = alturas.sorted()
-                                .getOrNull(alturas.size / 2)?.toDouble()
+                            alturaMedianaLinhaPx = alturas.getOrNull(alturas.size / 2),
+                            linhas = linhas
                         )
                     )
                 }
@@ -129,18 +101,21 @@ object OcrService {
         }
 
     /**
-     * OCR com ampliação adaptativa (pipeline adaptativo).
-     *
-     * 1. Lê a imagem original e mede o tamanho do texto (altura das linhas)
-     * 2. Se o texto estiver pequeno, ou se nada foi achado, amplia a imagem
-     *    (AmpliacaoAdaptativa decide quanto) e lê de novo
-     * 3. Fica com a passada que reconheceu mais texto
-     *
-     * A segunda passada só acontece quando pode ajudar; texto grande é lido
-     * uma vez só. Critério "mais texto": sem o campo de confiança do OCR, a
-     * quantidade de letras e dígitos reconhecidos é o sinal disponível, e nos
-     * testes a passada ampliada só perdia por diferenças mínimas.
+     * Altura de uma linha medida perpendicular a ela, pelos quatro cantos que o ML Kit
+     * devolve (superior esquerdo, superior direito, inferior direito, inferior esquerdo): a
+     * média das duas laterais.
      */
+    private fun alturaDaLinha(cantos: Array<Point>?, caixa: Rect?): Double? {
+        if (cantos != null && cantos.size == 4) {
+            val esquerda = hypot((cantos[3].x - cantos[0].x).toDouble(), (cantos[3].y - cantos[0].y).toDouble())
+            val direita = hypot((cantos[2].x - cantos[1].x).toDouble(), (cantos[2].y - cantos[1].y).toDouble())
+            val media = (esquerda + direita) / 2
+            if (media > 0.0) return media
+        }
+        return caixa?.height()?.toDouble()?.takeIf { it > 0.0 }
+    }
+
+    /** OCR com ampliação adaptativa (pipeline adaptativo). 1. */
     suspend fun reconhecerAdaptativo(bitmap: Bitmap): ResultadoOcrAdaptativo {
         val inicio = System.currentTimeMillis()
         val primeira = reconhecerTexto(bitmap)
@@ -181,17 +156,8 @@ object OcrService {
     }
 
     /**
-     * Reconhece o texto e devolve também as caixas dos blocos, normalizadas
-     * pelo tamanho da imagem.
-     *
-     * Por que normalizar aqui: a sondagem de estabilidade roda em quadros de
-     * baixa resolução e a captura final em alta resolução. Devolvendo as
-     * caixas em fração da imagem, o restante do código compara quadros de
-     * resoluções diferentes sem converter escala em lugar nenhum.
-     *
-     * Usa BLOCOS (e não linhas) como unidade: blocos são mais estáveis entre
-     * quadros, porque pequenas variações do reconhecimento quebram e
-     * reagrupam linhas com muito mais frequência.
+     * Reconhece o texto e devolve também as caixas dos blocos, normalizadas pelo tamanho da
+     * imagem.
      */
     suspend fun reconhecerComCaixas(bitmap: Bitmap): ResultadoOcrDetalhado =
         suspendCancellableCoroutine { continuation ->
@@ -243,17 +209,7 @@ object OcrService {
                 }
         }
 
-    /**
-     * Localiza onde está o texto na imagem e recorta apenas essa região.
-     *
-     * Motivação: numa foto tirada por um óculos, o texto pode ocupar só uma
-     * parte do quadro (o resto é mesa, parede, a outra página). Recortar a
-     * região de texto concentra os pixels onde eles importam, melhorando o
-     * reconhecimento na segunda passada.
-     *
-     * @param margemPercentual folga ao redor do texto (0.05 = 5% de cada lado)
-     * @return o bitmap recortado, ou null se não valer o recorte
-     */
+    /** Localiza onde está o texto na imagem e recorta apenas essa região. */
     suspend fun recortarRegiaoDeTexto(
         bitmap: Bitmap,
         margemPercentual: Double = 0.05

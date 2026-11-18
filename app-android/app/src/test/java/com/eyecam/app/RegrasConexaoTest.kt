@@ -1,14 +1,13 @@
 package com.eyecam.app
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Testes das regras da conexão automática com o óculos (RegrasConexao).
- */
+/** Testes das regras da conexão automática com o óculos (RegrasConexao). */
 class RegrasConexaoTest {
 
     private val bssid = "aa:bb:cc:dd:ee:ff"
@@ -83,6 +82,17 @@ class RegrasConexaoTest {
         val json = """{"dispositivo":"Eye-cam","versao_firmware":"5.4.0","ap_ip":"192.168.4.1"}"""
         assertNull(RegrasConexao.extrairBssid(json))
         assertNull(RegrasConexao.extrairBssid(null))
+    }
+
+    @Test
+    fun bssid_soEhAprendidoNoPedidoConfirmadoPeloUsuario() {
+        assertTrue(RegrasConexao.deveAprenderBssid(FormaConexao.PEDIDO_SEM_BSSID))
+        // Conexão manual não é aprovação para o Android: guardar o BSSID ali fazia o pedido
+        // seguinte cancelar a caixa de confirmação aos 12 s
+        assertFalse(RegrasConexao.deveAprenderBssid(FormaConexao.REDE_JA_CONECTADA))
+        assertFalse(RegrasConexao.deveAprenderBssid(FormaConexao.SO_MANUAL))
+        // Já aprendido: nada a mudar
+        assertFalse(RegrasConexao.deveAprenderBssid(FormaConexao.PEDIDO_COM_BSSID))
     }
 
     @Test

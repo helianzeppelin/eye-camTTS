@@ -4,15 +4,7 @@ import android.content.Context
 import android.speech.tts.TextToSpeech
 import java.util.Locale
 
-/**
- * Controla a síntese de voz (Text-To-Speech) nativa do Android.
- * Precisa ser inicializado antes do uso e desligado ao fechar o app.
- *
- * @param mensagemInicial frase dita assim que o motor fica pronto. Orienta o
- *        usuário cego ao abrir o app e evita que a primeira fala se perca: o
- *        motor leva um instante para inicializar, e falar() antes disso não
- *        tem efeito.
- */
+/** Controla a síntese de voz (Text-To-Speech) nativa do Android. */
 class TtsService(context: Context, private val mensagemInicial: String? = null) {
 
     private var tts: TextToSpeech? = null
@@ -31,16 +23,7 @@ class TtsService(context: Context, private val mensagemInicial: String? = null) 
         }
     }
 
-    /**
-     * Fala o texto em voz alta.
-     * Se já estiver falando, interrompe e começa o novo texto.
-     *
-     * O Android RECUSA, sem falar nada, textos maiores que
-     * getMaxSpeechInputLength() (4.000 caracteres). Uma página de livro pode
-     * passar disso — a página de teste tem ~4.300. Por isso o texto é
-     * dividido: a primeira parte interrompe a fala anterior (QUEUE_FLUSH) e
-     * as demais entram na fila (QUEUE_ADD).
-     */
+    /** Fala o texto em voz alta. */
     fun falar(texto: String) {
         if (!pronto || texto.isBlank()) return
         val limite = TextToSpeech.getMaxSpeechInputLength() - MARGEM_LIMITE
@@ -50,16 +33,12 @@ class TtsService(context: Context, private val mensagemInicial: String? = null) 
         }
     }
 
-    /**
-     * Para a fala atual (e descarta as partes que estavam na fila).
-     */
+    /** Para a fala atual (e descarta as partes que estavam na fila). */
     fun parar() {
         tts?.stop()
     }
 
-    /**
-     * Desliga o motor de TTS. Chamar quando o app for fechado.
-     */
+    /** Desliga o motor de TTS. */
     fun desligar() {
         tts?.stop()
         tts?.shutdown()
@@ -73,11 +52,8 @@ class TtsService(context: Context, private val mensagemInicial: String? = null) 
 }
 
 /**
- * Divide um texto em partes de no máximo [limite] caracteres, cortando de
- * preferência no fim de uma frase e, se não houver um perto, no último espaço.
- *
- * Fica fora da classe, sem dependência do Android, para poder ser testada no
- * computador (DivisaoTextoTest).
+ * Divide um texto em partes de no máximo [limite] caracteres, cortando de preferência no
+ * fim de uma frase e, se não houver um perto, no último espaço.
  */
 internal fun dividirEmPartes(texto: String, limite: Int): List<String> {
     require(limite > 1) { "limite precisa ser maior que 1" }
@@ -86,9 +62,7 @@ internal fun dividirEmPartes(texto: String, limite: Int): List<String> {
     var resto = texto.trim()
 
     while (resto.length > limite) {
-        // Último fim de frase dentro do limite. Se ele ficar na primeira
-        // metade (frase enorme), corta no último espaço; se nem isso
-        // existir (uma "palavra" gigante), corta seco no limite.
+        // Último fim de frase dentro do limite.
         var corte = resto.lastIndexOfAny(charArrayOf('.', '!', '?', '\n'), limite - 1)
         if (corte < limite / 2) corte = resto.lastIndexOf(' ', limite - 1)
         if (corte <= 0) corte = limite - 1

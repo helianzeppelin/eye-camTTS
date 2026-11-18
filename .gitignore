@@ -21,3 +21,6 @@ firmware/**/segredos.h
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# APK gerado para o Release do GitHub (não vai para o Git)
+release_apk/

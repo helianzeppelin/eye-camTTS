@@ -6,16 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Testes unitários de Estabilidade.kt.
- *
- * Rodam no computador (sem celular): Estabilidade é Kotlin puro, exceto
- * CaixaNormalizada.de(Rect), que depende do Android e não é testada aqui.
- *
- * Importância para o TCC: Estabilidade.similaridade() é a métrica usada para
- * medir a taxa de acerto do OCR contra o texto de referência. Estes testes
- * documentam que a métrica calcula o que se afirma no relatório.
- */
+/** Testes unitários de Estabilidade.kt. */
 class EstabilidadeTest {
 
     // ---------------------------------------------------------------- normalizar

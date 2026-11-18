@@ -1,8 +1,6 @@
 package com.eyecam.app
 
-/**
- * Tipos de passo do modo bancada.
- */
+/** Tipos de passo do modo bancada. */
 enum class TipoPasso {
     /** Uma foto (com ou sem foco antes), leitura e acerto: um aperto, um registro */
     FOTO,
@@ -17,27 +15,7 @@ enum class TipoPasso {
     SEQUENCIA_LEITURA
 }
 
-/**
- * Um passo do plano de testes. Tudo o que depende do programa (resolução,
- * autofoco, leitura, repetições, nome dos arquivos) é fixado aqui, para que
- * o usuário na bancada só cuide da montagem física e aperte um botão.
- *
- * @param id nome do teste e dos arquivos, por exemplo "B30-5MP-r1"
- * @param montagem o que precisa estar montado na bancada. Quando muda de um
- *        passo para o seguinte, a tela pede confirmação antes de capturar
- * @param instrucao o que fazer neste passo
- * @param focarAntes tira antes uma foto SVGA com autofoco, só para focar (o
- *        autofoco não converge em alta resolução; a lente mantém a posição)
- * @param autofocoNaFinal autofoco na foto final (só faz sentido em SVGA)
- * @param lerTexto passa a foto final pelo OCR, com e sem ampliação
- * @param repeticoes quantas vezes a sequência repete (passos de sequência)
- * @param salvarFoto grava o JPEG recebido do óculos
- * @param palavraEsperada palavra que a foto tem de mostrar (teste da foto
- *        atrasada); null quando não se aplica
- * @param confirmarMontagem pede o "Já ajustei" quando a montagem muda. Falso
- *        quando a própria instrução é a mudança (trocar a folha no teste da
- *        foto atrasada)
- */
+/** Um passo do plano de testes. */
 data class PassoTeste(
     val id: String,
     val tipo: TipoPasso,
@@ -45,12 +23,18 @@ data class PassoTeste(
     val instrucao: String,
     val resolucao: String = "5mp",
     val focarAntes: Boolean = true,
+    val resolucaoFoco: String = "svga",
     val autofocoNaFinal: Boolean = false,
     val lerTexto: Boolean = true,
     val repeticoes: Int = 1,
     val salvarFoto: Boolean = true,
     val palavraEsperada: String? = null,
-    val confirmarMontagem: Boolean = true
+    val confirmarMontagem: Boolean = true,
+    val xclkMhz: Int? = null,
+    val xclkAltaMhz: Int? = null,
+    val distanciaCm: Int? = null,
+    /** Foto da página de tamanhos: o acerto é medido por frase (AcertoTamanhos) */
+    val paginaTamanhos: Boolean = false
 )
 
 data class PlanoTestes(
@@ -60,20 +44,39 @@ data class PlanoTestes(
     val passos: List<PassoTeste>
 )
 
-/**
- * Os planos do roteiro de testes (tcc_local/guias/ROTEIRO_SEM_NOTEBOOK).
- * Kotlin puro: a sequência de testes é conferida em PlanoTestesTest.
- */
+/** Os planos do roteiro de testes (tcc_local/guias/ROTEIRO_SEM_NOTEBOOK). */
 object PlanosTestes {
 
     private const val LUZ_BANCADA = "luz da bancada"
+
+    /** Clock da câmera do firmware (XCLK_PADRAO_MHZ), nos dois casos */
+    const val XCLK_PADRAO_MHZ = 10
+
+    /** Escala medida da câmera: px/mm × distância em cm, numa foto de 2560 px de largura. */
+    const val ESCALA_PX_MM_CM_5MP = 121.0
+
+    /** Escala esperada de uma foto (px/mm) a [distanciaCm] cm da página */
+    fun pxPorMmEsperado(distanciaCm: Int, larguraFoto: Int): Double =
+        ESCALA_PX_MM_CM_5MP * larguraFoto / 2560.0 / distanciaCm
 
     val FIRMWARE = PlanoTestes(
         id = "firmware",
         nome = "Firmware",
         descricao = "Foco, fotos UXGA e 5 MP seguidas e foto atrasada. O app registra " +
-            "o tempo do foco, as falhas e a contagem de FB-OVF da placa (firmware v5.6.2).",
+            "o tempo e o resultado do foco, as falhas e a contagem de FB-OVF da placa " +
+            "(firmware v5.6.3 ou posterior).",
         passos = passosFirmware()
+    )
+
+    val FOCO = PlanoTestes(
+        id = "foco",
+        nome = "Foco",
+        descricao = "Mesma página, 3 repetições de cada forma de focar: em SVGA (a do " +
+            "app), em XGA, na própria foto de 5 MP e em SVGA com o clock a 20 MHz; " +
+            "depois, 5 fotos de 5 MP com o clock a 16 MHz. O app registra a nitidez " +
+            "do centro da foto, as zonas que o sensor diz ter focado e o acerto. " +
+            "Exige o firmware v5.6.3 ou posterior.",
+        passos = passosFoco()
     )
 
     val BANCADA = PlanoTestes(
@@ -94,7 +97,26 @@ object PlanosTestes {
         passos = passosTempos()
     )
 
-    val TODOS = listOf(FIRMWARE, BANCADA, TEMPOS)
+    val OCULOS = PlanoTestes(
+        id = "oculos",
+        nome = "Óculos",
+        descricao = "Protótipo de mesa: a câmera na armação, com os LEDs. Só 5 MP, 3 " +
+            "repetições: luz natural de janela a 20, 25, 30 e 35 cm e quarto escuro só com " +
+            "os LEDs a 20, 25 e 30 cm. 21 fotos. O app foca em SVGA, lê e calcula o acerto " +
+            "de cada corpo (pela altura das linhas se o título não for lido).",
+        passos = passosOculos()
+    )
+
+    val TAMANHOS = PlanoTestes(
+        id = "tamanhos",
+        nome = "Tamanhos",
+        descricao = "Página de tamanhos (frases de 32 a 10 pt), segurada a 20, 25 e 30 cm do óculos: " +
+            "3 fotos em 5 MP e 1 em SVGA por distância, 12 fotos. O app foca em SVGA, lê e calcula " +
+            "o acerto de cada tamanho e o menor tamanho lido (acerto de 80% ou mais).",
+        passos = passosTamanhos()
+    )
+
+    val TODOS = listOf(FIRMWARE, FOCO, BANCADA, TEMPOS, OCULOS, TAMANHOS)
 
     fun porId(id: String?): PlanoTestes? = TODOS.firstOrNull { it.id == id }
 
@@ -108,10 +130,13 @@ object PlanosTestes {
     /** O que o app faz sozinho neste passo, para a tela e para o registro */
     fun descricaoAutomatica(passo: PassoTeste): String {
         val rotulo = rotulo(passo.resolucao)
+        val foco = rotulo(passo.resolucaoFoco)
         val autofoco = if (passo.autofocoNaFinal) "com autofoco" else "sem autofoco"
+        val clock = descreverClock(passo)
         return when (passo.tipo) {
             TipoPasso.FOTO -> buildString {
-                if (passo.focarAntes) append("Foco em SVGA, depois ")
+                append(clock)
+                if (passo.focarAntes) append("Foco em $foco, depois ")
                 append("foto $rotulo $autofoco")
                 when {
                     passo.palavraEsperada != null -> append(" · procura a palavra ${passo.palavraEsperada} na foto")
@@ -120,8 +145,9 @@ object PlanosTestes {
                 append(" · salva foto e registro")
             }
             TipoPasso.SEQUENCIA_FOTOS -> buildString {
+                append(clock)
                 append("${passo.repeticoes} fotos $rotulo $autofoco")
-                if (passo.focarAntes) append(", depois de um foco em SVGA")
+                if (passo.focarAntes) append(", depois de um foco em $foco")
                 append(" · registra tempos, foco, falhas e FB-OVF")
             }
             TipoPasso.SEQUENCIA_CONEXAO ->
@@ -134,6 +160,22 @@ object PlanosTestes {
     /** Texto do botão principal da tela */
     fun rotuloBotao(passo: PassoTeste): String =
         if (passo.tipo == TipoPasso.FOTO) "CAPTURAR" else "INICIAR (${passo.repeticoes}×)"
+
+    /** Parâmetros da rota /tune que deixam o clock como o passo pede */
+    fun ajusteDeClock(passo: PassoTeste): Map<String, String> = mapOf(
+        "xclk" to (passo.xclkMhz ?: XCLK_PADRAO_MHZ).toString(),
+        "xclk_alta" to (passo.xclkAltaMhz ?: XCLK_PADRAO_MHZ).toString()
+    )
+
+    /** true quando o passo pede um clock diferente do padrão do firmware */
+    fun usaClockDeTeste(passo: PassoTeste): Boolean =
+        (passo.xclkMhz ?: XCLK_PADRAO_MHZ) != XCLK_PADRAO_MHZ ||
+            (passo.xclkAltaMhz ?: XCLK_PADRAO_MHZ) != XCLK_PADRAO_MHZ
+
+    private fun descreverClock(passo: PassoTeste): String = buildString {
+        passo.xclkMhz?.let { append("XCLK $it MHz até XGA · ") }
+        passo.xclkAltaMhz?.let { append("XCLK $it MHz acima de XGA · ") }
+    }
 
     // ------------------------------------------------------------------
 
@@ -158,8 +200,8 @@ object PlanosTestes {
             )
         )
 
-        // Foto atrasada: a foto tirada logo depois de trocar a folha tem de
-        // mostrar a folha nova. O app procura a palavra na foto
+        // Foto atrasada: a foto tirada logo depois de trocar a folha tem de mostrar a folha
+        // nova.
         for ((resolucao, autofoco) in listOf("svga" to true, "uxga" to false)) {
             for (r in 1..5) {
                 val base = "F6-${rotulo(resolucao)}-r$r"
@@ -182,21 +224,91 @@ object PlanosTestes {
         return passos
     }
 
+    /** Formas de focar, na mesma montagem. */
+    private fun passosFoco(): List<PassoTeste> {
+        val montagem = "Página v2 PLANA e presa, com o CENTRO da foto sobre o texto (o foco " +
+            "mede o centro) · câmera a 30 cm da página (da lente ao papel) · $LUZ_BANCADA"
+        val instrucao = "Aperte CAPTURAR e não mexa na câmera até terminar."
+        val formas = (1..3).flatMap { r ->
+            listOf(
+                PassoTeste(
+                    id = "FO-SVGA-r$r", tipo = TipoPasso.FOTO, montagem = montagem, instrucao = instrucao,
+                    distanciaCm = 30
+                ),
+                PassoTeste(
+                    id = "FO-XGA-r$r", tipo = TipoPasso.FOTO, montagem = montagem, instrucao = instrucao,
+                    resolucaoFoco = "xga", distanciaCm = 30
+                ),
+                PassoTeste(
+                    id = "FO-5MPAF-r$r", tipo = TipoPasso.FOTO, montagem = montagem, instrucao = instrucao,
+                    focarAntes = false, autofocoNaFinal = true, distanciaCm = 30
+                ),
+                PassoTeste(
+                    id = "FO-SVGA20-r$r", tipo = TipoPasso.FOTO, montagem = montagem, instrucao = instrucao,
+                    xclkMhz = 20, distanciaCm = 30
+                )
+            )
+        }
+        return formas + PassoTeste(
+            id = "FO-5MP16-x5", tipo = TipoPasso.SEQUENCIA_FOTOS, montagem = montagem,
+            instrucao = "Um foco em SVGA e 5 fotos de 5 MP com o clock a 16 MHz: falhas, FB-OVF e tempo do quadro.",
+            lerTexto = false, repeticoes = 5, xclkAltaMhz = 16
+        )
+    }
+
+    private fun passosOculos(): List<PassoTeste> {
+        val natural = "luz NATURAL de janela, indireta (sem sol direto na folha)"
+        val leds = "quarto ESCURO: só os LEDs do óculos acesos"
+        return listOf(20, 25, 30, 35).flatMap { d -> grupoOculos("ON$d", d, natural) } +
+            listOf(20, 25, 30).flatMap { d -> grupoOculos("OL$d", d, leds) }
+    }
+
+    /**
+     * Página de tamanhos a 20, 25 e 30 cm: 3 fotos de 5 MP e 1 de SVGA (para mostrar o
+     * limite da resolução baixa) por distância.
+     */
+    private fun passosTamanhos(): List<PassoTeste> =
+        listOf(20, 25, 30).flatMap { d ->
+            val montagem = "Vestindo o óculos, segure a página de TAMANHOS de frente para a câmera, o " +
+                "mais reta possível, texto no centro da foto · $d cm da lente ao papel (meça com " +
+                "régua ou um barbante preso ao óculos) · luz do ambiente, sem lâmpada na foto"
+            (1..3).map { r ->
+                PassoTeste(
+                    id = "TA$d-5MP-r$r", tipo = TipoPasso.FOTO, montagem = montagem,
+                    instrucao = "Aperte CAPTURAR e não mexa no óculos nem na folha até terminar.",
+                    resolucao = "5mp", distanciaCm = d, paginaTamanhos = true
+                )
+            } + PassoTeste(
+                id = "TA$d-SVGA", tipo = TipoPasso.FOTO, montagem = montagem,
+                instrucao = "Aperte CAPTURAR (foto em SVGA, para comparar).",
+                resolucao = "svga", distanciaCm = d, paginaTamanhos = true
+            )
+        }
+
+    /** Um grupo do protótipo: mesma montagem, 3 fotos de 5 MP */
+    private fun grupoOculos(grupo: String, distanciaCm: Int, luz: String): List<PassoTeste> =
+        (1..3).map { r ->
+            PassoTeste(
+                id = "$grupo-5MP-r$r",
+                tipo = TipoPasso.FOTO,
+                montagem = "Óculos no suporte, página v2 plana e de frente para a câmera, centro da foto " +
+                    "sobre o texto · $distanciaCm cm da lente ao papel · $luz",
+                instrucao = "Aperte CAPTURAR e não mexa no óculos até terminar.",
+                resolucao = "5mp",
+                distanciaCm = distanciaCm
+            )
+        }
+
     private fun passosBancada(): List<PassoTeste> =
         grupoBancada("B25", 25, LUZ_BANCADA, listOf("uxga", "qxga", "5mp")) +
         grupoBancada("B30", 30, LUZ_BANCADA, listOf("uxga", "qxga", "5mp")) +
         grupoBancada("B35", 35, LUZ_BANCADA, listOf("uxga", "5mp")) +
-        grupoBancada("B40", 40, LUZ_BANCADA, listOf("uxga", "5mp")) +
+        grupoBancada("B40", 40, "$LUZ_BANCADA (opcional: pode pular)", listOf("uxga", "5mp")) +
         grupoBancada("L30", 30, "luz FRACA: a da bancada desligada, só a do ambiente", listOf("5mp")) +
         grupoBancada("S30", 30, "luz da bancada + SOMBRA na metade esquerda da folha (mão ou livro em pé)", listOf("5mp")) +
         grupoBancada("B20", 20, "$LUZ_BANCADA (opcional: pode pular)", listOf("uxga", "5mp"))
 
-    /**
-     * Um grupo da bancada: mesma montagem, várias resoluções, 3 repetições.
-     * As resoluções se alternam dentro de cada repetição (UXGA r1, 5MP r1,
-     * UXGA r2…): uma mudança lenta de luz ou de posição durante o grupo
-     * afeta todas as resoluções por igual, em vez de só a última.
-     */
+    /** Um grupo da bancada: mesma montagem, várias resoluções, 3 repetições. */
     private fun grupoBancada(
         grupo: String,
         distanciaCm: Int,
@@ -207,9 +319,11 @@ object PlanosTestes {
             PassoTeste(
                 id = "$grupo-${rotulo(resolucao)}-r$r",
                 tipo = TipoPasso.FOTO,
-                montagem = "Câmera a $distanciaCm cm da página (da lente ao papel) · $luz",
+                montagem = "Página v2 plana, centro da foto sobre o texto · câmera a $distanciaCm cm " +
+                    "da página (da lente ao papel) · $luz",
                 instrucao = "Aperte CAPTURAR e não mexa na câmera até terminar.",
-                resolucao = resolucao
+                resolucao = resolucao,
+                distanciaCm = distanciaCm
             )
         }
     }

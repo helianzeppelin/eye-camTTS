@@ -3,9 +3,7 @@ package com.eyecam.app
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/**
- * Testes da regra de ampliação adaptativa (AmpliacaoAdaptativa.fator).
- */
+/** Testes da regra de ampliação adaptativa (AmpliacaoAdaptativa.fator). */
 class AmpliacaoAdaptativaTest {
 
     private val delta = 1e-9

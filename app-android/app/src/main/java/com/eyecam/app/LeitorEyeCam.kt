@@ -3,31 +3,7 @@ package com.eyecam.app
 import android.content.Context
 import android.graphics.Bitmap
 
-/**
- * Parâmetros do processo de leitura.
- *
- * @param resolucaoSondagem resolução dos quadros baratos usados para avaliar
- *        estabilidade. Precisa ser alta o bastante para o ML Kit reconhecer
- *        texto de forma REPETÍVEL — não precisa ser correto, precisa ser
- *        consistente entre quadros. Abaixo de SVGA o reconhecimento de corpo
- *        10 pt vira ruído aleatório e o portão nunca fecha.
- * @param resolucaoFinal resolução da captura definitiva. Os testes com a
- *        câmera virtual mostraram que ela decide o acerto: texto de 10 pt a
- *        30 cm tem ~16 px por em em UXGA (no limite) e ~26 em "5mp"
- * @param maxSondagens teto de sondagens antes de desistir e ler assim mesmo.
- *        0 = MODO DIRETO, sem portão: uma captura em resolução baixa só para o
- *        autofoco convergir, e logo a captura final. É o modo usado enquanto
- *        o portão não foi calibrado: para 10 pt, o texto das sondagens em
- *        SVGA é pequeno demais para o OCR e o sinal textual não fecharia
- * @param sondagensSemTexto após esta quantidade de sondagens sem detectar
- *        texto algum, aborta (não adianta insistir apontando para o nada)
- * @param exigirEstabilidadeTextual se false, usa apenas o sinal geométrico
- *        (posição das caixas). Útil quando a resolução de sondagem é baixa
- *        demais para o texto ser repetível.
- * @param usarEnquadramento aplica DocumentProcessor na imagem final
- * @param ampliacaoAdaptativa amplia a imagem final antes do OCR quando o
- *        texto está pequeno (OcrService.reconhecerAdaptativo)
- */
+/** Parâmetros do processo de leitura. estabilidade. */
 data class ConfigLeitura(
     val resolucaoSondagem: String = "svga",
     val resolucaoFinal: String = "uxga",
@@ -41,24 +17,16 @@ data class ConfigLeitura(
     val ampliacaoAdaptativa: Boolean = true
 )
 
-/**
- * Aviso de progresso emitido durante a leitura.
- *
- * @param statusVisual texto curto para a tela
- * @param falar frase a ser dita em voz alta, ou null para não falar.
- *        O orquestrador evita repetir a mesma frase em sondagens
- *        seguidas — falar a cada quadro seria insuportável.
- * @param detalhe informação técnica para o modo desenvolvedor
- */
+/** Aviso de progresso emitido durante a leitura. */
 data class ProgressoLeitura(
     val statusVisual: String,
     val falar: String? = null,
-    val detalhe: String? = null
+    val detalhe: String? = null,
+    /** A foto final chegou: a página já pode ser baixada. */
+    val fotoTirada: Boolean = false
 )
 
-/**
- * Resultado final de uma leitura.
- */
+/** Resultado final de uma leitura. */
 data class ResultadoLeitura(
     val sucesso: Boolean,
     val texto: String,
@@ -73,47 +41,17 @@ data class ResultadoLeitura(
     val alturaLinhaPx: Double? = null
 )
 
-/**
- * Orquestra a leitura completa com portão de estabilidade.
- *
- * A ideia central: capturar em alta resolução é caro (segundos + banda).
- * Antes de pagar esse custo, o sistema faz algumas sondagens baratas para
- * confirmar que a cena está parada e que existe texto no quadro. Só então
- * dispara a captura definitiva.
- *
- * Sequência:
- *   1. Conecta na rede do óculos e confirma, com um ping, que ele responde
- *   2. Sondagem 1: captura COM autofoco (resolução baixa)
- *   3. Sondagens seguintes: capturam SEM autofoco (a lente já está travada),
- *      exceto depois de um quadro sem texto, quando o foco é refeito
- *   4. A cada sondagem, avalia estabilidade e avisa o usuário
- *   5. Estável -> captura final em alta resolução, sem refocar
- *   6. OCR na imagem final
- *
- * Por que a captura final vai sem autofoco: os testes mostraram que o
- * autofoco falha em alta resolução — a 10 MHz de clock, os quadros são
- * lentos demais para o algoritmo de foco avaliar nitidez dentro do tempo
- * limite. Focando durante as sondagens (resolução baixa, quadros rápidos)
- * e capturando em seguida, a lente permanece na posição correta.
- */
+/** Orquestra a leitura completa com portão de estabilidade. */
 object LeitorEyeCam {
 
     // Capturas seguidas sem resposta antes de desistir
     private const val MAX_FALHAS_SEGUIDAS = 2
 
-    // Resolução de reserva da captura final. O firmware recusa 5 MP quando
-    // não conseguiu reservar o buffer de 5 MP no boot (/info mostra
-    // resolucao_maxima = uxga), e o firmware anterior à v5.4 nem conhece 5 MP.
-    // Nesses casos, ler em UXGA é melhor do que não ler.
+    // Resolução de reserva da captura final.
     private const val RESOLUCAO_RESERVA = "uxga"
     private val RESOLUCOES_ACIMA_DE_UXGA = setOf("qxga", "qsxga", "5mp")
 
-    /**
-     * Executa uma leitura completa.
-     *
-     * @param onProgresso chamado a cada etapa; a tela decide o que fazer
-     *        (mostrar, falar, vibrar)
-     */
+    /** Executa uma leitura completa. */
     suspend fun ler(
         context: Context,
         config: ConfigLeitura = ConfigLeitura(),
@@ -129,9 +67,7 @@ object LeitorEyeCam {
         val aviso = RegrasConexao.avisoAntesDeConectar(ConexaoOculos.formaPrevista(context))
         onProgresso(ProgressoLeitura("Conectando ao óculos...", aviso))
 
-        // Confirma que o óculos responde ANTES das sondagens. Sem isso, com o
-        // óculos desligado e o celular em outro Wi-Fi, cada sondagem esperaria
-        // o timeout de conexão: quase um minuto de silêncio para o usuário.
+        // Confirma que o óculos responde ANTES das sondagens.
         if (!EyeCamClient.conectarNaRede(context) || !EyeCamClient.ping()) {
             return ResultadoLeitura(
                 sucesso = false,
@@ -157,17 +93,13 @@ object LeitorEyeCam {
         var falhasSeguidas = 0
         var ultimaFalaEmitida: String? = null
 
-        // A primeira sondagem sempre foca. Depois de um quadro com texto a
-        // lente está na distância certa e refocar custaria cerca de um
-        // segundo por quadro. Mas se o quadro NÃO tinha texto (o usuário
-        // ainda não apontou para a página), o foco travou na distância
-        // errada e precisa ser refeito na próxima sondagem.
+        // A primeira sondagem sempre foca.
         var focoPendente = true
         val modoDireto = config.maxSondagens <= 0
 
         if (modoDireto) {
-            // Sem portão: esta captura serve só para o autofoco convergir em
-            // resolução baixa (quadros rápidos). A imagem é descartada.
+            // Sem portão: esta captura serve só para o autofoco convergir em resolução
+            // baixa (quadros rápidos).
             onProgresso(ProgressoLeitura("Focando...", "Lendo"))
             if (EyeCamClient.capturarFoto(config.resolucaoSondagem, autofoco = true) == null) {
                 return ResultadoLeitura(
@@ -202,8 +134,8 @@ object LeitorEyeCam {
                         "captura retornou nulo"
                     )
                 )
-                // O ping passou, mas o óculos parou de responder (saiu do
-                // alcance, desligou, travou). Insistir só prolonga a espera.
+                // O ping passou, mas o óculos parou de responder (saiu do alcance,
+                // desligou, travou).
                 if (falhasSeguidas >= MAX_FALHAS_SEGUIDAS) {
                     return ResultadoLeitura(
                         sucesso = false,
@@ -285,8 +217,8 @@ object LeitorEyeCam {
         if (imagemFinal == null && config.resolucaoFinal != RESOLUCAO_RESERVA &&
             config.resolucaoFinal in RESOLUCOES_ACIMA_DE_UXGA
         ) {
-            // O detalhe vai para o relatório do modo desenvolvedor: sem ele, um
-            // teste "em 5 MP" que caiu para UXGA seria registrado como 5 MP
+            // O detalhe vai para o relatório do modo desenvolvedor: sem ele, um teste "em 5
+            // MP" que caiu para UXGA seria registrado como 5 MP
             onProgresso(
                 ProgressoLeitura(
                     "Tentando em resolução menor...",
@@ -310,6 +242,8 @@ object LeitorEyeCam {
                 tempoTotalMs = System.currentTimeMillis() - inicio
             )
         }
+
+        onProgresso(ProgressoLeitura("Foto tirada. Reconhecendo o texto...", null, fotoTirada = true))
 
         // --- Passo 4: enquadramento (opcional) ---
         var imagemParaOcr = imagemFinal
@@ -361,8 +295,8 @@ object LeitorEyeCam {
         }
 
         if (resultadoOcr.texto.isBlank()) {
-            // Causa mais comum, pelos testes: letra com poucos pixels (longe
-            // demais) ou pouca luz. A mensagem diz o que fazer.
+            // Causa mais comum, pelos testes: letra com poucos pixels (longe demais) ou
+            // pouca luz.
             return ResultadoLeitura(
                 sucesso = false,
                 texto = "",
@@ -391,11 +325,7 @@ object LeitorEyeCam {
         )
     }
 
-    /**
-     * Converte o motivo técnico da instabilidade em uma orientação útil.
-     * O usuário não precisa saber o que é uma caixa de detecção — precisa
-     * saber o que fazer com as mãos.
-     */
+    /** Converte o motivo técnico da instabilidade em uma orientação útil. */
     private fun orientacaoPara(motivo: String): String? = when (motivo) {
         "câmera em movimento" -> "Segure firme"
         "caixas deslocaram"   -> "Segure firme"
@@ -406,10 +336,7 @@ object LeitorEyeCam {
         else                  -> null
     }
 
-    /**
-     * Evita repetir a mesma frase em sondagens consecutivas. Sem isso, o
-     * app diria "segure firme" cinco vezes seguidas.
-     */
+    /** Evita repetir a mesma frase em sondagens consecutivas. */
     private fun falarSeNovo(frase: String?, ultima: String?): String? {
         if (frase == null) return null
         if (frase == ultima) return null

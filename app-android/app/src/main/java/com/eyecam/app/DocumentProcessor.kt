@@ -16,56 +16,28 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
-/**
- * Resultado do enquadramento automático da imagem.
- *
- * @param bitmap     imagem corrigida
- * @param metodo     qual estratégia funcionou ("perspectiva", "inclinacao", "nenhum")
- * @param anguloGraus ângulo corrigido, quando aplicável
- */
+/** Resultado do enquadramento automático da imagem. */
 data class ResultadoEnquadramento(
     val bitmap: Bitmap,
     val metodo: String,
     val anguloGraus: Double = 0.0
 )
 
-/**
- * Corrige automaticamente o enquadramento da imagem capturada.
- *
- * Motivação: em um dispositivo vestível, o usuário não consegue enquadrar a
- * página (especialmente sendo deficiente visual). A imagem chega torta, com
- * distorção de perspectiva e com elementos irrelevantes ao redor do texto.
- * Este módulo resolve isso em software, antes do OCR.
- *
- * Estratégias, em ordem de tentativa:
- *   1. Detecção de página + correção de perspectiva (melhor resultado)
- *   2. Correção de inclinação das linhas de texto (fallback)
- */
+/** Corrige automaticamente o enquadramento da imagem capturada. */
 object DocumentProcessor {
 
     // Largura usada na etapa de DETECÇÃO (não no resultado final).
-    // Detectar bordas numa imagem reduzida é muito mais rápido, e os cantos
-    // encontrados são depois reescalados para a imagem original.
     private const val LARGURA_DETECCAO = 600.0
 
     // A página detectada precisa ocupar ao menos esta fração da imagem.
-    // Evita que o algoritmo recorte um retângulo pequeno qualquer.
     private const val AREA_MINIMA_RELATIVA = 0.15
 
-    // Limites do deskew: abaixo do mínimo não vale a pena, acima do máximo
-    // provavelmente é uma leitura errada do ângulo.
+    // Limites do deskew: abaixo do mínimo não vale a pena, acima do máximo provavelmente é
+    // uma leitura errada do ângulo.
     private const val ANGULO_MINIMO = 0.5
     private const val ANGULO_MAXIMO = 30.0
 
-    /**
-     * Ponto de entrada: tenta enquadrar a imagem automaticamente.
-     *
-     * Roda em Dispatchers.Default: a correção de perspectiva em UXGA com
-     * INTER_CUBIC é pesada demais para a thread principal.
-     *
-     * @param corrigirPerspectiva tenta detectar a página e corrigir perspectiva
-     * @param corrigirInclinacao  tenta endireitar as linhas de texto
-     */
+    /** Ponto de entrada: tenta enquadrar a imagem automaticamente. */
     suspend fun enquadrar(
         bitmap: Bitmap,
         corrigirPerspectiva: Boolean = true,
@@ -90,10 +62,8 @@ object DocumentProcessor {
     // ESTRATÉGIA 1 — DETECÇÃO DE PÁGINA E CORREÇÃO DE PERSPECTIVA
     // ========================================================================
     /**
-     * Procura o maior quadrilátero da imagem (a folha de papel) e aplica uma
-     * transformação de perspectiva para transformá-lo num retângulo reto.
-     *
-     * Retorna null se não encontrar um quadrilátero convincente.
+     * Procura o maior quadrilátero da imagem (a folha de papel) e aplica uma transformação
+     * de perspectiva para transformá-lo num retângulo reto.
      */
     private fun detectarPagina(bitmap: Bitmap): ResultadoEnquadramento? {
         val original = Mat()
@@ -139,8 +109,8 @@ object DocumentProcessor {
             val perimetro = Imgproc.arcLength(curva, true)
             val aproximado = MatOfPoint2f()
 
-            // approxPolyDP simplifica o contorno; com 2% do perímetro,
-            // um retângulo levemente irregular colapsa em 4 pontos.
+            // approxPolyDP simplifica o contorno; com 2% do perímetro, um retângulo
+            // levemente irregular colapsa em 4 pontos.
             Imgproc.approxPolyDP(curva, aproximado, 0.02 * perimetro, true)
 
             if (aproximado.total() == 4L) {
@@ -188,13 +158,7 @@ object DocumentProcessor {
         return ResultadoEnquadramento(resultado, "perspectiva")
     }
 
-    /**
-     * Ordena 4 pontos como: topo-esquerda, topo-direita, baixo-direita, baixo-esquerda.
-     *
-     * Truque: a soma (x+y) é mínima no canto superior esquerdo e máxima no
-     * inferior direito; a diferença (y-x) é mínima no superior direito e
-     * máxima no inferior esquerdo.
-     */
+    /** Ordena 4 pontos como: topo-esquerda, topo-direita, baixo-direita, baixo-esquerda. */
     private fun ordenarCantos(pontos: Array<Point>): Array<Point> {
         val somas = pontos.map { it.x + it.y }
         val difs = pontos.map { it.y - it.x }
@@ -208,8 +172,8 @@ object DocumentProcessor {
     }
 
     /**
-     * Aplica a transformação de perspectiva: mapeia os 4 cantos detectados
-     * para um retângulo perfeito, "desamassando" a página.
+     * Aplica a transformação de perspectiva: mapeia os 4 cantos detectados para um
+     * retângulo perfeito, "desamassando" a página.
      */
     private fun aplicarPerspectiva(origem: Mat, cantos: Array<Point>): Bitmap {
         val (topoEsq, topoDir, baixoDir, baixoEsq) = cantos
@@ -258,15 +222,7 @@ object DocumentProcessor {
     // ========================================================================
     // ESTRATÉGIA 2 — CORREÇÃO DE INCLINAÇÃO (DESKEW)
     // ========================================================================
-    /**
-     * Mede o ângulo das linhas de texto e rotaciona a imagem para deixá-las
-     * horizontais. Usado quando a página preenche o quadro e não há bordas
-     * detectáveis.
-     *
-     * Como funciona: binariza o texto, une as letras em blocos horizontais
-     * (dilatação horizontal), e mede o ângulo do menor retângulo que envolve
-     * todos os pixels de texto.
-     */
+    /** Mede o ângulo das linhas de texto e rotaciona a imagem para deixá-las horizontais. */
     private fun endireitarTexto(bitmap: Bitmap): ResultadoEnquadramento? {
         val original = Mat()
         Utils.bitmapToMat(bitmap, original)
@@ -275,15 +231,13 @@ object DocumentProcessor {
         Imgproc.cvtColor(original, cinza, Imgproc.COLOR_RGBA2GRAY)
 
         // Binariza invertido: texto vira branco (valor alto), fundo vira preto.
-        // O OTSU escolhe o limiar automaticamente.
         val binaria = Mat()
         Imgproc.threshold(
             cinza, binaria, 0.0, 255.0,
             Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU
         )
 
-        // Une as letras de cada linha num traço contínuo. Um kernel largo e
-        // baixo (30x3) conecta na horizontal sem juntar linhas vizinhas.
+        // Une as letras de cada linha num traço contínuo.
         val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(30.0, 3.0))
         Imgproc.morphologyEx(binaria, binaria, Imgproc.MORPH_CLOSE, kernel)
 
@@ -303,8 +257,8 @@ object DocumentProcessor {
         val retangulo = Imgproc.minAreaRect(pontos)
         var angulo = retangulo.angle
 
-        // Normaliza para a faixa [-45, 45]: o retângulo pode ser descrito
-        // de quatro formas equivalentes, e queremos a menor rotação.
+        // Normaliza para a faixa [-45, 45]: o retângulo pode ser descrito de quatro formas
+        // equivalentes, e queremos a menor rotação.
         if (angulo > 45) angulo -= 90
         if (angulo < -45) angulo += 90
 
@@ -322,8 +276,8 @@ object DocumentProcessor {
         val centro = Point(original.cols() / 2.0, original.rows() / 2.0)
         val rotacao = Imgproc.getRotationMatrix2D(centro, angulo, 1.0)
         val rotacionada = Mat()
-        // BORDER_REPLICATE estende as bordas em vez de deixar faixas negras
-        // nos cantos após a rotação.
+        // BORDER_REPLICATE estende as bordas em vez de deixar faixas negras nos cantos após
+        // a rotação.
         Imgproc.warpAffine(
             original, rotacionada, rotacao, original.size(),
             Imgproc.INTER_CUBIC, Core.BORDER_REPLICATE
@@ -341,9 +295,7 @@ object DocumentProcessor {
     // ========================================================================
     // AUXILIAR
     // ========================================================================
-    /**
-     * Converte um Mat para Bitmap, tratando imagens de 1 canal (cinza).
-     */
+    /** Converte um Mat para Bitmap, tratando imagens de 1 canal (cinza). */
     private fun matParaBitmap(mat: Mat): Bitmap {
         val saida = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
 

@@ -4,12 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/**
- * Testes de dividirEmPartes() (TtsService.kt).
- *
- * O TextToSpeech do Android recusa textos acima de 4.000 caracteres. Estes
- * testes garantem que a divisão respeita o limite e não perde palavras.
- */
+/** Testes de dividirEmPartes() (TtsService.kt). */
 class DivisaoTextoTest {
 
     private val paragrafo =

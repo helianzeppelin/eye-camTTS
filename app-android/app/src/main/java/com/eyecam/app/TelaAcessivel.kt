@@ -30,16 +30,15 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-// Distância mínima para um deslize contar como gesto. Em dp, para valer o
-// mesmo em qualquer densidade de tela (40 px eram ~15 dp num celular atual).
+// Distância mínima para um deslize contar como gesto.
 private val LIMIAR_DESLIZE = 60.dp
 
 @Composable
 fun TelaAcessivel(onAbrirDev: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    // A frase inicial é dita quando o motor de voz fica pronto: orienta o
-    // usuário cego ao abrir o app
+    // A frase inicial é dita quando o motor de voz fica pronto: orienta o usuário cego ao
+    // abrir o app
     val tts = remember { TtsService(context, "Eye-cam pronto. Toque duas vezes para ler.") }
     DisposableEffect(Unit) { onDispose { tts.desligar() } }
 
@@ -47,18 +46,9 @@ fun TelaAcessivel(onAbrirDev: () -> Unit) {
     var ultimoTexto by remember { mutableStateOf("") }
     var carregando by remember { mutableStateOf(false) }
 
-    // Função de captura completa (toque duplo)
-    // Leitura: foca em resolução baixa e captura em alta, sem o portão de
-    // estabilidade (maxSondagens = 0), com ampliação adaptativa no OCR.
-    //
-    // Até 10/2026 o modo acessível capturava em SVGA: texto de 10 pt a 25 cm
-    // ficava com ~10 px por em, ilegível com qualquer foco ou tratamento
-    // (testes com a câmera virtual). A resolução final é o fator que mais
-    // pesa no acerto: a 30 cm, 10 pt tem ~16 px por em em UXGA (no limite) e
-    // ~26 em 5 MP, com folga mesmo com foco apenas bom. Por isso a captura
-    // final é em 5 MP (decisão de 20/10/2026). Se o óculos recusar 5 MP, o
-    // LeitorEyeCam tenta de novo em UXGA. O portão (maxSondagens = 5) fica
-    // para depois da calibração no modo desenvolvedor.
+    // Função de captura completa (toque duplo) Leitura: foca em resolução baixa e captura
+    // em alta, sem o portão de estabilidade (maxSondagens = 0), com ampliação adaptativa no
+    // OCR.
     val configLeitura = remember {
         ConfigLeitura(
             resolucaoSondagem = "svga",
@@ -74,13 +64,15 @@ fun TelaAcessivel(onAbrirDev: () -> Unit) {
         scope.launch {
             carregando = true
             vibrar(context)
-            // try/finally: qualquer falha inesperada vira aviso falado, e o
-            // carregando sempre volta a false (senão a tela travaria em
-            // "ocupada" e ignoraria os próximos toques duplos)
+            // try/finally: qualquer falha inesperada vira aviso falado, e o carregando
+            // sempre volta a false (senão a tela travaria em "ocupada" e ignoraria os
+            // próximos toques duplos)
             try {
                 val resultado = LeitorEyeCam.ler(context, configLeitura) { progresso ->
                     status = progresso.statusVisual
                     progresso.falar?.let { tts.falar(it) }
+                    // Vibração dupla e bipe: "pode baixar a folha".
+                    if (progresso.fotoTirada) avisarFotoTirada(context)
                 }
 
                 if (resultado.sucesso) {
@@ -141,12 +133,9 @@ fun TelaAcessivel(onAbrirDev: () -> Unit) {
             .systemBarsPadding()
             .background(MaterialTheme.colorScheme.background)
             .semantics {
-                // Com o TalkBack ligado, os gestos abaixo não chegam ao
-                // pointerInput: o toque duplo vira a AÇÃO DE CLIQUE do
-                // elemento focado, e os deslizes servem para navegar. Por
-                // isso as ações também são declaradas aqui. O TalkBack anuncia
-                // "toque duas vezes para capturar e ler" e oferece Repetir e
-                // Parar no menu de ações. Sem TalkBack, os gestos não mudam.
+                // Com o TalkBack ligado, os gestos abaixo não chegam ao pointerInput: o
+                // toque duplo vira a AÇÃO DE CLIQUE do elemento focado, e os deslizes
+                // servem para navegar.
                 contentDescription = "Área de leitura do Eye-cam"
                 onClick(label = "capturar e ler") { capturarELer(); true }
                 onLongClick(label = "testar a conexão") { testarConexao(); true }
@@ -162,11 +151,8 @@ fun TelaAcessivel(onAbrirDev: () -> Unit) {
                 )
             }
             .pointerInput(Unit) {
-                // O callback recebe o deslocamento de CADA evento de toque, e
-                // não o do gesto inteiro. Comparar cada evento com o limiar
-                // fazia um deslize lento nunca disparar e um rápido disparar
-                // várias vezes. Por isso o deslocamento é somado e a decisão
-                // sai uma única vez, no fim do gesto.
+                // O callback recebe o deslocamento de CADA evento de toque, e não o do
+                // gesto inteiro.
                 var total = 0f
                 detectHorizontalDragGestures(
                     onDragStart = { total = 0f },
@@ -214,9 +200,7 @@ fun TelaAcessivel(onAbrirDev: () -> Unit) {
     }
 }
 
-/**
- * Faz o celular vibrar brevemente (feedback tátil).
- */
+/** Faz o celular vibrar brevemente (feedback tátil). */
 fun vibrar(context: Context) {
     val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val manager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
@@ -226,10 +210,27 @@ fun vibrar(context: Context) {
         @Suppress("DEPRECATION")
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+    // O app exige o Android 8 (minSdk 26), que já tem o VibrationEffect
+    vibrator.vibrate(VibrationEffect.createOneShot(50, VibrationEffect.DEFAULT_AMPLITUDE))
+}
+
+/**
+ * Aviso de "foto tirada": duas vibrações curtas e um bipe, diferente da vibração simples do
+ * toque, para o usuário saber que já pode baixar a folha.
+ */
+fun avisarFotoTirada(context: Context) {
+    val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
     } else {
         @Suppress("DEPRECATION")
-        vibrator.vibrate(50)
+        context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+    }
+    vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 60, 80, 60), -1))
+    try {
+        val tom = android.media.ToneGenerator(android.media.AudioManager.STREAM_MUSIC, 80)
+        tom.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 200)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tom.release() }, 400)
+    } catch (e: RuntimeException) {
+        // sem áudio disponível: fica só a vibração
     }
 }

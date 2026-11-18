@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Testes dos planos do modo bancada: nomes de arquivo únicos e seguros,
- * condições fixadas e pedido de confirmação quando a montagem muda.
+ * Testes dos planos do modo bancada: nomes de arquivo únicos e seguros, condições fixadas e
+ * pedido de confirmação quando a montagem muda.
  */
 class PlanoTestesTest {
 
@@ -87,6 +87,76 @@ class PlanoTestesTest {
     @Test
     fun planoPorId() {
         assertEquals(PlanosTestes.TEMPOS, PlanosTestes.porId("tempos"))
+        assertEquals(PlanosTestes.FOCO, PlanosTestes.porId("foco"))
         assertEquals(null, PlanosTestes.porId("inexistente"))
+    }
+
+    @Test
+    fun focoTemQuatroFormasCom3RepeticoesEUmaSequencia() {
+        val fotos = PlanosTestes.FOCO.passos.filter { it.tipo == TipoPasso.FOTO }
+        val porForma = fotos.groupBy { it.id.substringBeforeLast("-r") }
+        assertEquals(setOf("FO-SVGA", "FO-XGA", "FO-5MPAF", "FO-SVGA20"), porForma.keys)
+        porForma.values.forEach { assertEquals(3, it.size) }
+        // Todas na mesma montagem: a nitidez só compara fotos da mesma cena
+        assertEquals(1, PlanosTestes.FOCO.passos.map { it.montagem }.toSet().size)
+        fotos.forEach { assertEquals("5mp", it.resolucao) }
+        assertEquals(TipoPasso.SEQUENCIA_FOTOS, PlanosTestes.FOCO.passos.last().tipo)
+    }
+
+    @Test
+    fun formasDeFocarDoPlanoFoco() {
+        val passo = PlanosTestes.FOCO.passos.associateBy { it.id }
+        assertEquals("xga", passo.getValue("FO-XGA-r1").resolucaoFoco)
+        assertFalse(passo.getValue("FO-5MPAF-r1").focarAntes)
+        assertTrue(passo.getValue("FO-5MPAF-r1").autofocoNaFinal)
+        val d = PlanosTestes.descricaoAutomatica(passo.getValue("FO-XGA-r2"))
+        assertTrue(d, d.contains("Foco em XGA"))
+    }
+
+    @Test
+    fun clockDoPassoVaiParaATune() {
+        val passo = PlanosTestes.FOCO.passos.associateBy { it.id }
+        val svga20 = passo.getValue("FO-SVGA20-r1")
+        assertEquals(mapOf("xclk" to "20", "xclk_alta" to "10"), PlanosTestes.ajusteDeClock(svga20))
+        assertTrue(PlanosTestes.usaClockDeTeste(svga20))
+        assertEquals(mapOf("xclk" to "10", "xclk_alta" to "16"), PlanosTestes.ajusteDeClock(passo.getValue("FO-5MP16-x5")))
+        // Passo sem clock próprio devolve a placa ao padrão
+        val comum = PlanosTestes.BANCADA.passos.first()
+        assertEquals(mapOf("xclk" to "10", "xclk_alta" to "10"), PlanosTestes.ajusteDeClock(comum))
+        assertFalse(PlanosTestes.usaClockDeTeste(comum))
+    }
+
+    @Test
+    fun passosComLeituraDaPaginaTemDistancia() {
+        val b30 = PlanosTestes.BANCADA.passos.first { it.id.startsWith("B30") }
+        assertEquals(30, b30.distanciaCm)
+        assertEquals(20, PlanosTestes.BANCADA.passos.first { it.id.startsWith("B20") }.distanciaCm)
+        PlanosTestes.FOCO.passos.filter { it.tipo == TipoPasso.FOTO }.forEach { assertEquals(30, it.distanciaCm) }
+    }
+
+    @Test
+    fun oculosTemSeteCondicoesCom3FotosDe5Mp() {
+        val passos = PlanosTestes.OCULOS.passos
+        assertEquals(21, passos.size)
+        val porCondicao = passos.groupBy { it.id.substringBefore("-") }
+        assertEquals(listOf("ON20", "ON25", "ON30", "ON35", "OL20", "OL25", "OL30"), porCondicao.keys.toList())
+        porCondicao.forEach { (condicao, grupo) ->
+            assertEquals(condicao, 3, grupo.size)
+            assertEquals(condicao.drop(2).toInt(), grupo.first().distanciaCm)
+            // Mesma montagem no grupo: só a primeira foto pede "Já ajustei"
+            grupo.zipWithNext().forEach { (a, b) -> assertFalse(PlanosTestes.mudouMontagem(a, b)) }
+        }
+        passos.forEach {
+            assertEquals("5mp", it.resolucao)
+            assertTrue(it.focarAntes)
+            assertTrue(it.lerTexto)
+        }
+    }
+
+    @Test
+    fun escalaEsperadaPelaDistancia() {
+        // 121 px/mm·cm em 5 MP (medido em 22/10/2026); UXGA tem 1600 px de largura
+        assertEquals(121.0 / 30, PlanosTestes.pxPorMmEsperado(30, 2560), 1e-9)
+        assertEquals(121.0 / 20 * 1600 / 2560, PlanosTestes.pxPorMmEsperado(20, 1600), 1e-9)
     }
 }

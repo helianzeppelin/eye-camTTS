@@ -13,23 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 
-/**
- * Arquivos do modo bancada: fotos, registros e planilhas de cada sessão, numa
- * pasta só.
- *
- * No Android 10 ou superior, em Download/EyeCam/<sessão>, pela MediaStore:
- * a pasta aparece no gerenciador de arquivos do celular e no computador pelo
- * cabo, e o app não precisa de permissão para gravar. A pasta Download aceita
- * qualquer tipo de arquivo, então foto e texto ficam juntos.
- *
- * No Android 8 e 9, na pasta do próprio app
- * (Android/data/com.eyecam.app/files/EyeCam/<sessão>), que também dispensa
- * permissão.
- *
- * Cada arquivo salvo é identificado por uma "referência" (o endereço
- * content:// ou o caminho do arquivo), usada para apagá-lo ao refazer um
- * teste.
- */
+/** Arquivos do modo bancada: fotos, registros e planilhas de cada sessão, numa pasta só. */
 object ArquivosTestes {
 
     private const val PASTA = "EyeCam"
@@ -67,8 +51,8 @@ object ArquivosTestes {
         salvar(context, sessao, nome, "text/plain", texto.toByteArray(Charsets.UTF_8))
 
     /**
-     * Acrescenta linhas a uma planilha da sessão, criando-a com o cabeçalho se
-     * ainda não existir.
+     * Acrescenta linhas a uma planilha da sessão, criando-a com o cabeçalho se ainda não
+     * existir.
      */
     suspend fun acrescentarPlanilha(
         context: Context,

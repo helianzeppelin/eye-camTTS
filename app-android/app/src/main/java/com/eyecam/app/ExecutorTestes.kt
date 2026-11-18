@@ -12,10 +12,8 @@ import java.time.format.DateTimeFormatter
 data class RefUltimo(val teste: String, val planilha: String, val arquivos: List<String>)
 
 /**
- * Resultado de um passo, para a tela.
- *
- * @param concluido true quando o passo conta como feito e a tela avança. Uma
- *        foto que falhou fica registrada, mas o passo se repete
+ * Resultado de um passo, para a tela. foto que falhou fica registrada, mas o passo se
+ * repete
  */
 class ResultadoPasso(
     val concluido: Boolean,
@@ -26,8 +24,8 @@ class ResultadoPasso(
 )
 
 /**
- * Onde cada plano parou, entre aberturas do app: se o celular desligar no
- * meio da bancada, os testes continuam do mesmo ponto, na mesma pasta.
+ * Onde cada plano parou, entre aberturas do app: se o celular desligar no meio da bancada,
+ * os testes continuam do mesmo ponto, na mesma pasta.
  */
 class EstadoTestes(context: Context) {
 
@@ -86,25 +84,17 @@ class EstadoTestes(context: Context) {
     }
 }
 
-/**
- * Executa os passos do modo bancada. Cada passo segue as condições fixadas no
- * plano (PlanoTestes) e grava, na pasta da sessão:
- *
- *   - <teste>.jpg: a foto exatamente como veio do óculos
- *   - <teste>.txt: tudo o que foi medido, o registro da placa e o texto lido
- *   - uma linha (ou várias, nas sequências) na planilha do tipo de passo
- *
- * Uma foto que falha também é registrada, com "-falha-<hora>" no nome.
- */
+/** Executa os passos do modo bancada. */
 object ExecutorTestes {
 
     private const val PLANILHA_FOTOS = "fotos.csv"
+    private const val PLANILHA_TAMANHOS = "tamanhos.csv"
     private const val PLANILHA_SEQUENCIAS = "sequencias.csv"
     private const val PLANILHA_CONEXOES = "conexoes.csv"
     private const val PLANILHA_LEITURAS = "leituras.csv"
 
-    // Entre soltar a rede do óculos e pedi-la de novo: tempo para o celular
-    // voltar ao Wi-Fi de casa, como acontece ao fechar e abrir o app
+    // Entre soltar a rede do óculos e pedi-la de novo: tempo para o celular voltar ao Wi-Fi
+    // de casa, como acontece ao fechar e abrir o app
     private const val PAUSA_ENTRE_CONEXOES_MS = 3000L
 
     private val FORMATO_DATA = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -135,6 +125,22 @@ object ExecutorTestes {
         }
         salvarInfoDaSessao(app, estado, sessao)
 
+        // Clock da câmera como o passo pede, ou o padrão: um passo anterior (plano Foco)
+        // pode ter deixado outro valor na placa.
+        if (passo.tipo != TipoPasso.SEQUENCIA_CONEXAO) {
+            val aceito = EyeCamClient.ajustar(PlanosTestes.ajusteDeClock(passo)) != null
+            if (!aceito && PlanosTestes.usaClockDeTeste(passo)) {
+                return ResultadoPasso(
+                    concluido = false,
+                    titulo = "${passo.id}: o óculos não aceitou o clock pedido",
+                    linhas = listOf(
+                        "Este passo exige o firmware v5.6.3 ou posterior (rota /tune com xclk).",
+                        "Nada foi salvo."
+                    )
+                )
+            }
+        }
+
         return when (passo.tipo) {
             TipoPasso.FOTO -> foto(app, estado, sessao, plano, passo, onProgresso)
             TipoPasso.SEQUENCIA_FOTOS -> sequenciaFotos(app, estado, sessao, plano, passo, onProgresso)
@@ -163,15 +169,17 @@ object ExecutorTestes {
     ): ResultadoPasso {
         val dataHora = agora()
         val rotulo = PlanosTestes.rotulo(passo.resolucao)
+        val rotuloFoco = PlanosTestes.rotulo(passo.resolucaoFoco)
 
         var foco: TentativaCaptura? = null
         if (passo.focarAntes) {
-            onProgresso("Focando (foto SVGA com autofoco)...")
-            foco = EyeCamClient.tentarCaptura("svga", autofoco = true)
+            onProgresso("Focando (foto $rotuloFoco com autofoco)...")
+            foco = EyeCamClient.tentarCaptura(passo.resolucaoFoco, autofoco = true)
         }
         onProgresso("Fotografando em $rotulo...")
         val final = EyeCamClient.tentarCaptura(passo.resolucao, passo.autofocoNaFinal)
         val captura = final.captura
+        val nitidezCentro = captura?.let { ImageProcessor.medirNitidezCentro(it.bitmap) }
 
         var ocr: ResultadoOcrAdaptativo? = null
         if (captura != null && passo.lerTexto) {
@@ -179,8 +187,17 @@ object ExecutorTestes {
             ocr = OcrService.reconhecerAdaptativo(captura.bitmap)
         }
         val ref = textoReferencia(app)
-        val porCorpoSem = ocr?.let { MedidorAcerto.medirPorCorpo(it.semAmpliacao.textosBlocos, ref) }.orEmpty()
-        val porCorpoCom = ocr?.let { MedidorAcerto.medirPorCorpo(it.resultado.textosBlocos, ref) }.orEmpty()
+        // Escala esperada pela distância da montagem: se os títulos não forem lidos, o
+        // corpo de cada parágrafo é deduzido pela altura das linhas
+        val escala = passo.distanciaCm?.let { d -> captura?.let { PlanosTestes.pxPorMmEsperado(d, maxOf(it.bitmap.width, it.bitmap.height)) } }
+        // Na página de tamanhos não há os blocos da página v2: o acerto é por frase
+        val porCorpoSem = if (passo.paginaTamanhos) emptyList()
+            else ocr?.let { o -> acertoPorCorpo(o.semAmpliacao, ref, escala) }.orEmpty()
+        val porCorpoCom = if (passo.paginaTamanhos) emptyList()
+            else ocr?.let { o -> acertoPorCorpo(o.resultado, ref, escala?.times(o.fatorAmpliacao)) }.orEmpty()
+        val tamanhos = if (passo.paginaTamanhos && ocr != null)
+            AcertoTamanhos.medir(ocr.resultado.texto, frasesTamanhos(app)) else emptyList()
+        val menorLido = AcertoTamanhos.menorCorpoLido(tamanhos)
         val palavraLida = passo.palavraEsperada?.let { palavraNaFoto(ocr?.resultado?.texto.orEmpty()) }
 
         onProgresso("Salvando...")
@@ -202,9 +219,10 @@ object ExecutorTestes {
             campo("condicoes", PlanosTestes.descricaoAutomatica(passo))
             campo("resultado", if (sucesso) "ok" else "falha")
             if (reiniciou) campo("aviso", "a placa reiniciou desde o teste anterior (veja motivo_reset no log)")
-            foco?.let { secao("foto_de_foco_svga"); camposCaptura(this, it) }
+            foco?.let { secao("foto_de_foco"); campo("resolucao_foco", passo.resolucaoFoco); camposCaptura(this, it) }
             secao("foto_final")
             camposCaptura(this, final)
+            campo("nitidez_centro", FormatoTestes.decimal(nitidezCentro, 0))
             ocr?.let { o ->
                 secao("ocr")
                 campo("altura_linha_px", FormatoTestes.decimal(o.alturaLinhaOriginalPx, 0))
@@ -212,10 +230,18 @@ object ExecutorTestes {
                 campo("fator_escolhido", FormatoTestes.decimal(o.fatorAmpliacao, 2))
                 campo("tempo_sem_ampliacao_ms", o.tempoSemAmpliacaoMs)
                 campo("tempo_total_ms", o.tempoTotalMs)
-                secao("acerto_sem_ampliacao")
-                camposAcerto(this, porCorpoSem)
-                secao("acerto_com_ampliacao")
-                camposAcerto(this, porCorpoCom)
+                escala?.let { campo("escala_esperada_px_mm", FormatoTestes.decimal(it, 2)) }
+                campo("corpo_por", FormatoTestes.origemDosCorpos(porCorpoCom).ifBlank { "nenhum corpo encontrado" })
+                if (passo.paginaTamanhos) {
+                    secao("acerto_por_tamanho")
+                    tamanhos.forEach { campo("${it.corpo}_pt", FormatoTestes.decimal(it.acerto, 0)) }
+                    campo("menor_corpo_lido", menorLido?.let { "$it pt" } ?: "nenhum")
+                } else {
+                    secao("acerto_sem_ampliacao")
+                    camposAcerto(this, porCorpoSem)
+                    secao("acerto_com_ampliacao")
+                    camposAcerto(this, porCorpoCom)
+                }
             }
             passo.palavraEsperada?.let {
                 secao("foto_atrasada")
@@ -243,13 +269,20 @@ object ExecutorTestes {
             "data_hora" to dataHora,
             "resolucao_pedida" to passo.resolucao,
             "autofoco_final" to simNao(passo.autofocoNaFinal),
+            "foco_resolucao" to when {
+                passo.focarAntes -> passo.resolucaoFoco
+                passo.autofocoNaFinal -> passo.resolucao
+                else -> ""
+            },
             "foco_total_app_ms" to (foco?.tempoTotalMs?.toString() ?: ""),
+            "nitidez_centro" to FormatoTestes.decimal(nitidezCentro, 0),
             "ocr_sem_ms" to (ocr?.tempoSemAmpliacaoMs?.toString() ?: ""),
             "ocr_total_ms" to (ocr?.tempoTotalMs?.toString() ?: ""),
             "fator_ampliacao" to FormatoTestes.decimal(ocr?.fatorAmpliacao, 2),
             "altura_linha_px" to FormatoTestes.decimal(ocr?.alturaLinhaOriginalPx, 0),
             "acerto_inteiro_sem" to FormatoTestes.decimal(ocr?.let { Estabilidade.similaridade(it.semAmpliacao.texto, ref) }),
             "acerto_inteiro_com" to FormatoTestes.decimal(ocr?.let { Estabilidade.similaridade(it.resultado.texto, ref) }),
+            "corpo_por" to FormatoTestes.origemDosCorpos(porCorpoCom),
             "fracao_10" to FormatoTestes.decimal(porCorpoCom.firstOrNull { it.corpo == 10 }?.fracaoDoTexto, 2),
             "fracao_9" to FormatoTestes.decimal(porCorpoCom.firstOrNull { it.corpo == 9 }?.fracaoDoTexto, 2),
             "palavra_esperada" to (passo.palavraEsperada ?: ""),
@@ -261,6 +294,21 @@ object ExecutorTestes {
         linha += FormatoTestes.colunasDeAcerto("sem", porCorpoSem)
         linha += FormatoTestes.colunasDeAcerto("com", porCorpoCom)
         ArquivosTestes.acrescentarPlanilha(app, sessao, PLANILHA_FOTOS, FormatoTestes.COLUNAS_FOTOS, listOf(linha))
+        if (passo.paginaTamanhos) {
+            val linhaTamanhos = mutableMapOf(
+                "teste" to nome,
+                "data_hora" to dataHora,
+                "resolucao_pedida" to passo.resolucao,
+                "distancia_cm" to (passo.distanciaCm?.toString() ?: ""),
+                "menor_corpo_lido" to (menorLido?.toString() ?: ""),
+                "fator_ampliacao" to FormatoTestes.decimal(ocr?.fatorAmpliacao, 2),
+                "erro" to (final.erro ?: "")
+            )
+            tamanhos.forEach { linhaTamanhos["t${it.corpo}"] = FormatoTestes.decimal(it.acerto, 0) }
+            ArquivosTestes.acrescentarPlanilha(
+                app, sessao, PLANILHA_TAMANHOS, FormatoTestes.COLUNAS_TAMANHOS, listOf(linhaTamanhos)
+            )
+        }
 
         // --- Resumo para a tela ---
         val linhasTela = mutableListOf<String>()
@@ -271,15 +319,23 @@ object ExecutorTestes {
         } else {
             linhasTela += "Foto ${captura.bitmap.width}×${captura.bitmap.height} · ${captura.bytes / 1024} KB · " +
                 "${FormatoTestes.segundos(final.tempoTotalMs)} (placa ${FormatoTestes.segundos(captura.tempoFirmwareMs)})"
-            foco?.let { linhasTela += "Foco em SVGA: ${descreverFoco(it)}" }
+            foco?.let { linhasTela += "Foco em $rotuloFoco: ${descreverFoco(it)}" }
             if (!passo.focarAntes && passo.autofocoNaFinal) linhasTela += "Foco: ${descreverFoco(final)}"
-            linhasTela += "Quadro: ${final.cabecalho("Captura-Ms") ?: "—"} ms · FB-OVF: ${final.cabecalho("Ovf") ?: "—"}"
+            linhasTela += "Quadro: ${final.cabecalho("Captura-Ms") ?: "—"} ms · FB-OVF: ${final.cabecalho("Ovf") ?: "—"}" +
+                (final.cabecalho("Temp-C")?.let { " · chip $it °C" } ?: "")
+            descreverRecuperacao(final)?.let { linhasTela += it }
+            nitidezCentro?.let { linhasTela += "Nitidez do centro: ${FormatoTestes.decimal(it, 0)} (só compara fotos da mesma cena)" }
             if (passo.palavraEsperada != null) {
                 linhasTela += descreverPalavra(passo.palavraEsperada, palavraLida)
+            } else if (passo.paginaTamanhos) {
+                linhasTela += "Acerto por tamanho: " +
+                    tamanhos.joinToString(" · ") { "${it.corpo} pt ${FormatoTestes.decimal(it.acerto, 0)}%" }
+                linhasTela += "Menor tamanho lido (≥ 80%): " + (menorLido?.let { "$it pt" } ?: "nenhum")
             } else if (ocr != null) {
                 val com = FormatoTestes.resumoAcertos(porCorpoCom)
                 if (com == null) {
-                    linhasTela += "Títulos \"BLOCO n — CORPO X pt\" não encontrados: confira o enquadramento"
+                    linhasTela += "Nenhum corpo de letra identificado (nem pelos títulos, nem pela altura das linhas): " +
+                        "confira o enquadramento"
                 } else if (ocr.fatorTentado > 1.0) {
                     linhasTela += "Com ampliação (${FormatoTestes.decimal(ocr.fatorAmpliacao, 2)}×): $com"
                     FormatoTestes.resumoAcertos(porCorpoSem)?.let { linhasTela += "Sem ampliação: $it" }
@@ -322,11 +378,11 @@ object ExecutorTestes {
         }
 
         if (passo.focarAntes) {
-            onProgresso("Focando (foto SVGA com autofoco)...")
-            val foco = EyeCamClient.tentarCaptura("svga", autofoco = true)
-            registro.secao("foto_de_foco_svga")
+            onProgresso("Focando (foto ${PlanosTestes.rotulo(passo.resolucaoFoco)} com autofoco)...")
+            val foco = EyeCamClient.tentarCaptura(passo.resolucaoFoco, autofoco = true)
+            registro.secao("foto_de_foco")
             camposCaptura(registro, foco)
-            linhas += linhaSequencia(passo, "foco", "svga", true, foco)
+            linhas += linhaSequencia(passo, "foco", passo.resolucaoFoco, true, foco)
         }
 
         val tentativas = mutableListOf<TentativaCaptura>()
@@ -349,12 +405,22 @@ object ExecutorTestes {
         val resumo = mutableListOf(
             "${boas.size} de ${tentativas.size} fotos ok · FB-OVF: ${if (ovfInformado) ovf.toString() else "— (firmware sem contagem)"}",
             "Tempo total: ${FormatoTestes.estatisticas(boas.map { it.tempoTotalMs })}",
-            "Na placa: ${FormatoTestes.estatisticas(boas.mapNotNull { it.captura?.tempoFirmwareMs })}"
+            "Na placa: ${FormatoTestes.estatisticas(boas.mapNotNull { it.captura?.tempoFirmwareMs })}",
+            "Quadro: ${FormatoTestes.estatisticas(tentativas.mapNotNull { it.cabecalho("Captura-Ms")?.toLongOrNull() })}"
         )
         if (passo.autofocoNaFinal) {
             val travou = tentativas.count { it.cabecalho("Foco") == "travado" }
             val tempos = tentativas.mapNotNull { it.cabecalho("Foco-Ms")?.toLongOrNull() }
-            resumo += "Foco travou em $travou de ${tentativas.size} · ${FormatoTestes.estatisticas(tempos)}"
+            resumo += "Foco confirmado em $travou de ${tentativas.size} · ${FormatoTestes.estatisticas(tempos)}"
+        }
+        val recuperadas = tentativas.mapNotNull { it.cabecalho("Recuperacao") }.filter { it != "nenhuma" }
+        if (recuperadas.isNotEmpty()) {
+            resumo += "Recuperações da câmera: " + recuperadas.groupingBy { it }.eachCount()
+                .entries.joinToString(", ") { "${it.key} ${it.value}×" }
+        }
+        val temperaturas = tentativas.mapNotNull { it.cabecalho("Temp-C")?.replace(',', '.')?.toDoubleOrNull() }
+        if (temperaturas.isNotEmpty()) {
+            resumo += "Chip: de ${FormatoTestes.decimal(temperaturas.min())} a ${FormatoTestes.decimal(temperaturas.max())} °C"
         }
         if (reiniciou) resumo.add(0, "⚠ A placa reiniciou durante ou antes da sequência")
 
@@ -537,10 +603,7 @@ object ExecutorTestes {
     // Auxiliares
     // ------------------------------------------------------------------
 
-    /**
-     * Registro da placa desde o último teste. Se a numeração voltou para trás,
-     * a placa reiniciou: pega tudo desde o boot, que inclui o motivo do reset.
-     */
+    /** Registro da placa desde o último teste. */
     private suspend fun lerLogDaPlaca(estado: EstadoTestes): Pair<String, Boolean> {
         val desde = estado.linhaLog
         var resposta = EyeCamClient.obterLog(desde)
@@ -589,16 +652,34 @@ object ExecutorTestes {
 
     private fun camposAcerto(registro: TextoRegistro, porCorpo: List<AcertoCorpo>) {
         if (porCorpo.isEmpty()) {
-            registro.campo("corpos", "nenhum título encontrado")
+            registro.campo("corpos", "nenhum corpo identificado (nem pelos títulos, nem pela altura das linhas)")
             return
         }
         porCorpo.forEach { a ->
             registro.campo(
                 "${a.corpo}_pt",
                 "${FormatoTestes.decimal(a.acerto)}% (${a.caracteres} caracteres, " +
-                    "${FormatoTestes.decimal(a.fracaoDoTexto * 100, 0)}% do texto)"
+                    "${FormatoTestes.decimal(a.fracaoDoTexto * 100, 0)}% do texto" +
+                    (a.alturaLinhaPx?.let { ", pela altura das linhas: ${FormatoTestes.decimal(it, 0)} px" } ?: "") + ")"
             )
         }
+    }
+
+    /**
+     * Acerto por corpo pelos títulos da página; sem título legível e com a escala da
+     * montagem conhecida, pela altura das linhas
+     */
+    private fun acertoPorCorpo(ocr: ResultadoOcr, ref: String, escalaPxMm: Double?): List<AcertoCorpo> =
+        MedidorAcerto.medirPorCorpo(ocr.textosBlocos, ref).ifEmpty {
+            escalaPxMm?.let { MedidorAcerto.medirPorAltura(ocr.linhas, ref, it) }.orEmpty()
+        }
+
+    /** Linha da tela quando o firmware precisou recuperar a câmera (v5.6.4) */
+    private fun descreverRecuperacao(t: TentativaCaptura): String? = when (t.cabecalho("Recuperacao")) {
+        "compressao" -> "⚠ A câmera não entregou o quadro; saiu com o JPEG mais comprimido (qualidade ${t.cabecalho("Qualidade") ?: "?"})"
+        "reinicio" -> "⚠ A câmera não entregou o quadro; saiu depois de reiniciar a câmera e focar de novo"
+        "falhou" -> "A câmera não entregou o quadro nem depois de reiniciada"
+        else -> null
     }
 
     /** Colunas da planilha que vêm da foto final */
@@ -611,9 +692,15 @@ object ExecutorTestes {
         "ajuste_ms" to (t.cabecalho("Ajuste-Ms") ?: ""),
         "descarte_ms" to (t.cabecalho("Descarte-Ms") ?: ""),
         "quadro_ms" to (t.cabecalho("Captura-Ms") ?: ""),
+        "quadro_tentativas" to (t.cabecalho("Quadro-Tentativas") ?: ""),
+        "recuperacao" to (t.cabecalho("Recuperacao") ?: ""),
         "fb_ovf" to (t.cabecalho("Ovf") ?: ""),
         "avisos_camera" to (t.cabecalho("Avisos-Cam") ?: ""),
-        "captura_n" to (t.cabecalho("Captura-N") ?: "")
+        "captura_n" to (t.cabecalho("Captura-N") ?: ""),
+        "xclk_mhz" to (t.cabecalho("Xclk-Mhz") ?: ""),
+        "noturno" to (t.cabecalho("Noturno") ?: ""),
+        // Cabeçalho com ponto decimal ("41.3"); a planilha usa vírgula
+        "temperatura_c" to (t.cabecalho("Temp-C")?.replace('.', ',') ?: "")
     )
 
     /** Colunas do foco; vazias quando o foco não foi pedido nessa foto */
@@ -623,7 +710,8 @@ object ExecutorTestes {
         return mapOf(
             "foco_travou" to if (pedido) simNao(t.cabecalho("Foco") == "travado") else "",
             "foco_ms" to if (pedido) t.cabecalho("Foco-Ms").orEmpty() else "",
-            "foco_tentativas" to if (pedido) tentativas.orEmpty() else ""
+            "foco_tentativas" to if (pedido) tentativas.orEmpty() else "",
+            "foco_zonas" to if (pedido) t.cabecalho("Foco-Zonas").orEmpty() else ""
         )
     }
 
@@ -644,12 +732,18 @@ object ExecutorTestes {
     ) + colunasCaptura(t) + colunasFoco(t)
 
     private fun descreverFoco(t: TentativaCaptura): String {
-        val travou = t.cabecalho("Foco") == "travado"
+        val estado = when (t.cabecalho("Foco")) {
+            "travado" -> "travou"
+            // v5.6.3: o foco terminou, mas o sensor disse que nenhuma zona focou
+            "nao-confirmado" -> "NÃO confirmado pelo sensor"
+            else -> "NÃO travou"
+        }
         val ms = t.cabecalho("Foco-Ms")
         val tentativas = t.cabecalho("Foco-Tentativas")
-        return (if (travou) "travou" else "NÃO travou") +
+        return estado +
             (ms?.let { " em $it ms" } ?: "") +
-            (tentativas?.let { " ($it tentativa${if (it == "1") "" else "s"})" } ?: "")
+            (tentativas?.let { " ($it tentativa${if (it == "1") "" else "s"})" } ?: "") +
+            (t.cabecalho("Foco-Zonas")?.let { " · zonas $it" } ?: "")
     }
 
     private fun descreverPalavra(esperada: String, lida: String?): String = when {
@@ -675,6 +769,14 @@ object ExecutorTestes {
     private fun textoReferencia(context: Context): String =
         referencia ?: context.assets.open("texto_referencia.txt").bufferedReader()
             .use { it.readText() }.also { referencia = it }
+
+    private var frasesTamanhos: List<AcertoTamanhos.Frase>? = null
+
+    /** Frases da página de tamanhos (asset copiado de docs/testes/pagina_teste_tamanhos.txt) */
+    private fun frasesTamanhos(context: Context): List<AcertoTamanhos.Frase> =
+        frasesTamanhos ?: AcertoTamanhos.lerFrases(
+            context.assets.open("pagina_tamanhos.txt").bufferedReader().use { it.readText() }
+        ).also { frasesTamanhos = it }
 
     private fun simNao(valor: Boolean) = if (valor) "sim" else "não"
 

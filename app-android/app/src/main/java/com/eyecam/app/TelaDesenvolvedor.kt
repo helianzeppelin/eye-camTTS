@@ -27,9 +27,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// Resoluções oferecidas para os testes (Bloco 2 do protocolo). QXGA e 5MP
-// exigem o firmware v5.4 ou posterior.
+// Resoluções oferecidas para os testes (Bloco 2 do protocolo).
 private val RESOLUCOES = listOf("svga", "xga", "sxga", "uxga", "qxga", "5mp")
+
+// Subpasta de Download/EyeCam onde o "Salvar original" põe a foto e o relatório
+private const val PASTA_DEV = "modo_dev"
 
 @Composable
 fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
@@ -56,8 +58,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
     var infoOcr by remember { mutableStateOf("") }
     var nitidez by remember { mutableStateOf("") }
 
-    // Tratamento: tudo desligado por padrão (imagem crua para o ML Kit), que
-    // foi o que deu o melhor acerto nos testes. Ligue para a ablação.
+    // Tratamento: tudo desligado por padrão (imagem crua para o ML Kit), que foi o que deu
+    // o melhor acerto nos testes.
     var grayscale by remember { mutableStateOf(false) }
     var blur by remember { mutableStateOf(false) }
     var threshold by remember { mutableStateOf(false) }
@@ -72,6 +74,7 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
     // Captura (Blocos 1 e 2 do protocolo)
     var resolucao by remember { mutableStateOf("svga") }
     var usarAutofoco by remember { mutableStateOf(true) }
+    var rotacao by remember { mutableStateOf(EyeCamClient.rotacaoGraus) }
     var infoCaptura by remember { mutableStateOf("") }
 
     // Portão de estabilidade
@@ -88,17 +91,14 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
     // Conexão com o óculos: diagnóstico e tempo da última conexão
     var infoConexao by remember { mutableStateOf(ConexaoOculos.diagnostico(context)) }
     var tempoConexao by remember { mutableStateOf("") }
+    var infoOculos by remember { mutableStateOf("") }
 
     // Acerto do OCR contra o texto de referência
     var ultimoOcr by remember { mutableStateOf<ResultadoOcr?>(null) }
     var origemOcr by remember { mutableStateOf("") }
     var acerto by remember { mutableStateOf<ResultadoAcerto?>(null) }
 
-    /**
-     * Executa uma ação da tela em segundo plano. Uma exceção (do OpenCV, por
-     * exemplo) vira mensagem na tela em vez de fechar o app, e o indicador de
-     * carregamento sempre é desligado no fim, mesmo com return antecipado.
-     */
+    /** Executa uma ação da tela em segundo plano. */
     fun executar(mensagem: String, acao: suspend () -> Unit) {
         scope.launch {
             carregando = true
@@ -115,8 +115,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
         }
     }
 
-    // Abre uma imagem da galeria no lugar da captura do óculos: permite testar
-    // o programa (tratamento + ML Kit) separado da câmera
+    // Abre uma imagem da galeria no lugar da captura do óculos: permite testar o programa
+    // (tratamento + ML Kit) separado da câmera
     val seletorImagem = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -134,8 +134,7 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                 infoEnquadramento = ""
                 ultimoOcr = null
                 acerto = null
-                // O resumo de uma "4. Leitura completa" anterior iria junto
-                // no "Copiar resultado", misturando dois testes
+                // O resumo de uma "4.
                 resumoLeitura = ""
                 logEstabilidade = emptyList()
                 infoCaptura = "Imagem da galeria: ${imagem.width}×${imagem.height}"
@@ -159,7 +158,7 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
         appendLine("Ampliação automática: ${if (ampliacaoAuto) "sim" else "não"} | Portão: ${if (usarPortao) "sim" else "não"}")
         appendLine(infoConexao)
         if (origemOcr.isNotBlank()) appendLine("OCR feito na imagem: $origemOcr")
-        listOf(tempoConexao, infoCaptura, nitidez, infoEnquadramento, infoOcr, resumoLeitura)
+        listOf(tempoConexao, infoOculos, infoCaptura, nitidez, infoEnquadramento, infoOcr, resumoLeitura)
             .filter { it.isNotBlank() }
             .forEach { appendLine(it) }
         acerto?.let { a ->
@@ -230,6 +229,19 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
             }
         }
         SwitchLinha("Autofoco na captura", usarAutofoco) { usarAutofoco = it }
+        Text("Rotação da foto (placa deitada no óculos: 270°):")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(0, 90, 180, 270).forEach { g ->
+                FilterChip(
+                    selected = rotacao == g,
+                    onClick = {
+                        EyeCamClient.definirRotacao(context, g)
+                        rotacao = g
+                    },
+                    label = { Text("$g°") }
+                )
+            }
+        }
 
         HorizontalDivider()
         Text("Enquadramento automático:", fontWeight = FontWeight.SemiBold)
@@ -257,8 +269,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Mede o tempo até o óculos responder: com o celular já na rede,
-            // é quase só o ping; com pedido ao Android, inclui procurar a rede
+            // Mede o tempo até o óculos responder: com o celular já na rede, é quase só o
+            // ping; com pedido ao Android, inclui procurar a rede
             OutlinedButton(
                 onClick = {
                     executar("Conectando...") {
@@ -277,8 +289,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                 modifier = Modifier.weight(1f)
             ) { Text("Testar conexão") }
 
-            // Para trocar de placa: o BSSID muda, e o pedido com o BSSID
-            // antigo não encontraria a rede nova
+            // Para trocar de placa: o BSSID muda, e o pedido com o BSSID antigo não
+            // encontraria a rede nova
             OutlinedButton(
                 onClick = {
                     EyeCamClient.desconectar(context)
@@ -292,6 +304,30 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
             ) { Text("Esquecer óculos") }
         }
         if (tempoConexao.isNotBlank()) Text(tempoConexao, style = MaterialTheme.typography.bodySmall)
+
+        // Estado do óculos (rota /info) e as últimas mensagens dele (rota /log): versão do
+        // firmware, energia (bateria ou USB), tensão da bateria, câmera em espera.
+        OutlinedButton(
+            onClick = {
+                executar("Lendo o óculos...") {
+                    val ok = EyeCamClient.conectarNaRede(context) && EyeCamClient.ping()
+                    if (!ok) {
+                        infoOculos = ""
+                        status = RegrasConexao.orientacaoFalha(ConexaoOculos.conexaoAutomaticaDisponivel())
+                    } else {
+                        val info = EyeCamClient.obterInfo()
+                            ?.replace(",\"", ",\n\"")?.trim('{', '}') ?: "(sem resposta do /info)"
+                        val log = EyeCamClient.obterLog(0)?.texto?.trim()
+                            ?.lines()?.takeLast(15)?.joinToString("\n") ?: "(sem resposta do /log)"
+                        infoOculos = "INFO DO ÓCULOS\n$info\n\nÚLTIMAS MENSAGENS\n$log"
+                        status = "Informações do óculos lidas."
+                    }
+                }
+            },
+            enabled = !carregando,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Ver informações do óculos (/info e /log)") }
+        if (infoOculos.isNotBlank()) Text(infoOculos, style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
 
         Button(
@@ -299,7 +335,7 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                 executar("Capturando...") {
                     EyeCamClient.conectarNaRede(context)
                     infoConexao = ConexaoOculos.diagnostico(context)
-                    val captura = EyeCamClient.capturarFotoDetalhada(resolucao, usarAutofoco)
+                    val captura = EyeCamClient.tentarCaptura(resolucao, usarAutofoco).captura
                     if (captura == null) {
                         status = "Falha na captura."
                         return@executar
@@ -311,8 +347,7 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                     infoEnquadramento = ""
                     ultimoOcr = null
                     acerto = null
-                    // Idem: o resumo da leitura completa anterior não vale
-                    // para esta foto
+                    // Idem: o resumo da leitura completa anterior não vale para esta foto
                     resumoLeitura = ""
                     logEstabilidade = emptyList()
                     infoCaptura = descreverCaptura(captura, resolucao, usarAutofoco)
@@ -335,8 +370,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
             modifier = Modifier.fillMaxWidth()
         ) { Text("1a. Abrir imagem da galeria (sem o óculos)") }
 
-        // Opera sobre a foto original e a substitui pela versão enquadrada,
-        // para que as etapas seguintes trabalhem sobre a imagem corrigida
+        // Opera sobre a foto original e a substitui pela versão enquadrada, para que as
+        // etapas seguintes trabalhem sobre a imagem corrigida
         Button(
             onClick = {
                 val atual = fotoOriginal
@@ -429,8 +464,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                     origemOcr = if (alvo === fotoProcessada) "processada" else "original"
                     textoReconhecido = r.erro?.let { "Erro no OCR: $it" }
                         ?: r.texto.ifBlank { "(nenhum texto detectado)" }
-                    // A altura de linha é o "tamanho do texto" na imagem: abaixo
-                    // de ~20 px o acerto cai, segundo os testes
+                    // A altura de linha é o "tamanho do texto" na imagem: abaixo de ~20 px
+                    // o acerto cai, segundo os testes
                     val altura = adaptativo.alturaLinhaOriginalPx?.let { "%.0f px".format(it) } ?: "—"
                     infoOcr = "Blocos: ${r.qtdBlocos} | Linhas: ${r.qtdLinhas} | " +
                             "OCR: $tempoOcr ms (imagem $origemOcr) | altura de linha: $altura | " +
@@ -448,8 +483,8 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                 logEstabilidade = emptyList()
                 resumoLeitura = ""
                 executar(if (usarPortao) "Lendo com portão de estabilidade..." else "Focando e capturando...") {
-                    // Sem portão = o fluxo do modo acessível: foca em SVGA e
-                    // captura na resolução escolhida, sem refocar
+                    // Sem portão = o fluxo do modo acessível: foca em SVGA e captura na
+                    // resolução escolhida, sem refocar
                     val config = ConfigLeitura(
                         resolucaoSondagem = "svga",
                         resolucaoFinal = resolucao,
@@ -462,8 +497,9 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
 
                     val resultado = LeitorEyeCam.ler(context, config) { progresso ->
                         status = progresso.statusVisual
-                        // No modo dev não falamos as orientações: elas
-                        // atrapalhariam a leitura dos dados na tela
+                        // No modo dev não falamos as orientações: elas atrapalhariam a
+                        // leitura dos dados na tela.
+                        if (progresso.fotoTirada) avisarFotoTirada(context)
                         progresso.detalhe?.let { detalhe ->
                             logEstabilidade = logEstabilidade + detalhe
                         }
@@ -481,15 +517,14 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
 
                     textoReconhecido = resultado.texto.ifBlank { resultado.mensagem }
                     resultado.imagemFinal?.let { fotoOriginal = it }
-                    // Tamanho real da foto final: confirma a resolução usada (a
-                    // leitura cai para UXGA se o óculos recusar 5 MP) e substitui a
-                    // linha de uma captura anterior, que iria errada para o relatório
+                    // Tamanho real da foto final: confirma a resolução usada (a leitura cai
+                    // para UXGA se o óculos recusar 5 MP) e substitui a linha de uma
+                    // captura anterior, que iria errada para o relatório
                     infoCaptura = resultado.imagemFinal
                         ?.let { "Foto final da leitura completa: ${it.width}×${it.height}" } ?: ""
                     nitidez = ""   // era da foto anterior
                     fotoProcessada = null
-                    // O portão não devolve os blocos: o acerto fica só no
-                    // texto inteiro
+                    // O portão não devolve os blocos: o acerto fica só no texto inteiro
                     ultimoOcr = ResultadoOcr(resultado.texto, resultado.qtdBlocos, resultado.qtdLinhas)
                     origemOcr = "captura final da leitura completa (${resolucao.uppercase()})"
                     acerto = null
@@ -534,7 +569,23 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
                         scope.launch {
                             status = "Salvando..."
                             val ok = ImageSaver.salvarNaGaleria(context, o, "original")
-                            status = if (ok) "Original salva." else "Falha ao salvar."
+                            // Cópia da foto + o relatório (OCR, tempos, conexão) com o
+                            // mesmo nome, em Download/EyeCam/modo_dev, para casar foto e
+                            // resultado sem depender da ordem das mensagens copiadas
+                            val nome = "eyecam_" + SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                            val png = withContext(Dispatchers.Default) {
+                                java.io.ByteArrayOutputStream().also {
+                                    o.compress(Bitmap.CompressFormat.PNG, 100, it)
+                                }.toByteArray()
+                            }
+                            val okPng = ArquivosTestes.salvar(context, PASTA_DEV, "$nome.png", "image/png", png) != null
+                            val okTxt = ArquivosTestes.salvarTexto(context, PASTA_DEV, "$nome.txt", montarRelatorio()) != null
+                            status = when {
+                                okPng && okTxt -> "Salvo: Download/EyeCam/$PASTA_DEV/$nome (.png e .txt)" +
+                                    (if (ok) " e na galeria." else ".")
+                                ok -> "Original salva na galeria (falhou a cópia com o relatório)."
+                                else -> "Falha ao salvar."
+                            }
                         }
                     } else status = "Nenhuma foto original."
                 },
@@ -638,17 +689,19 @@ fun TelaDesenvolvedor(onVoltar: () -> Unit, onAbrirBancada: () -> Unit) {
 }
 
 /**
- * Linha de diagnóstico de uma captura, por exemplo:
- * "UXGA 1600×1200 · 105,6 KB · total 6912 ms (firmware 6378 ms) · foco: travado"
+ * Linha de diagnóstico de uma captura, por exemplo: "UXGA 1600×1200 · 105,6 KB · total 6912
+ * ms (firmware 6378 ms) · foco: travado"
  */
 private fun descreverCaptura(captura: Captura, resolucao: String, autofoco: Boolean): String {
     val firmware = captura.tempoFirmwareMs?.let { " (firmware $it ms)" } ?: ""
+    val zonas = captura.cabecalhos.entries
+        .firstOrNull { it.key.equals("X-Eyecam-Foco-Zonas", ignoreCase = true) }?.value
     val foco = when {
         !autofoco -> "desligado"
         captura.focoTravado == true -> "travado"
-        captura.focoTravado == false -> "não travou"
+        captura.focoTravado == false -> "não confirmado"
         else -> "?"
-    }
+    } + (zonas?.let { " (zonas $it)" } ?: "")
     return "%s %d×%d · %.1f KB · total %d ms%s · foco: %s".format(
         resolucao.uppercase(), captura.bitmap.width, captura.bitmap.height,
         captura.bytes / 1024.0, captura.tempoTotalMs, firmware, foco

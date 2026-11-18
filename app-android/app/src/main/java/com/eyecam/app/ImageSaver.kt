@@ -12,18 +12,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Salva imagens na galeria do celular (pasta Pictures/EyeCam).
- */
+/** Salva imagens na galeria do celular (pasta Pictures/EyeCam). */
 object ImageSaver {
 
-    /**
-     * Salva um bitmap na galeria com um prefixo no nome (ex: "original", "processada").
-     * Retorna true se salvou com sucesso.
-     *
-     * Roda em Dispatchers.IO: comprimir um PNG de 1600x1200 e gravá-lo leva
-     * perto de um segundo, tempo em que a tela ficaria congelada.
-     */
+    /** Salva um bitmap na galeria com um prefixo no nome (ex: "original", "processada"). */
     suspend fun salvarNaGaleria(
         context: Context,
         bitmap: Bitmap,
